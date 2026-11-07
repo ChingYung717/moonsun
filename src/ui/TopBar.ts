@@ -6,6 +6,7 @@ import {
   ViewMode,
   syncBrowserUrlNow,
 } from '../state/AppState';
+import { getCuratedCatalogStats } from '../astro/eclipses/catalog';
 import { MasterRenderer } from '../render/Renderer';
 import { SimulationClock } from '../time/Clock';
 import { computeEarthObserverSky } from '../astro/observer';
@@ -51,12 +52,13 @@ export class TopBar {
   }
 
   private render(): void {
+    const stats = getCuratedCatalogStats();
     this.el.innerHTML = `
       <div class="topbar-brand">
         <span class="brand-icon" aria-hidden="true">☀️🌍🌕</span>
         <div class="brand-text">
           <h1>日月地 3D 天文历算与天象系统</h1>
-          <span class="brand-sub">VSOP87/ELP 历算 · 200场精选日月食 · 中国传统农历</span>
+          <span class="brand-sub">VSOP87/ELP 历算 · ${stats.total}场精选日月食 · 中国传统农历</span>
         </div>
       </div>
 

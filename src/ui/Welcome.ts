@@ -1,4 +1,4 @@
-import { CURATED_ECLIPSE_CATALOG } from '../astro/eclipses/catalog';
+import { CURATED_ECLIPSE_CATALOG, getCuratedCatalogStats } from '../astro/eclipses/catalog';
 import { MasterRenderer } from '../render/Renderer';
 import { AppState, DEFAULT_MOON_SITES } from '../state/AppState';
 import { EclipsePanel } from './EclipsePanel';
@@ -97,13 +97,14 @@ export class WelcomeModal {
   }
 
   private render(): void {
+    const stats = getCuratedCatalogStats();
     this.el.innerHTML = `
       <div class="ms-welcome-card glass-panel" role="dialog" aria-modal="true" aria-labelledby="welcome-title">
         <div class="ms-welcome-head">
           <div class="ms-welcome-badge">☀️🌍🌕 欢迎体验</div>
           <h2 id="welcome-title">日月地 3D 实时天文与日月食历算系统</h2>
           <p class="ms-welcome-sub">
-            融合高精度天体历算、4K 行星贴图、全球与中国可见 200 场精选日月食以及中国传统农历月相。建议先从以下 <strong>3 个一键体验场景</strong> 开始：
+            融合高精度天体历算、4K 行星贴图、全球与中国可见 ${stats.total} 场精选日月食以及中国传统农历月相。建议先从以下 <strong>3 个一键体验场景</strong> 开始：
           </p>
         </div>
 
@@ -112,7 +113,7 @@ export class WelcomeModal {
             <span class="sc-icon">🌤</span>
             <div class="sc-body">
               <h3>1. 看看此刻的天空</h3>
-              <p>进入您所在地的第一人称地面视角，自动对准天空中可见的太阳或月亮，查看真实星表与星座。</p>
+              <p>进入当前地球观测点（默认北京，可在「📍 地点」随时切换城市或定位）的第一人称地面视角，自动对准可见的太阳或月亮。</p>
             </div>
             <span class="sc-go">立即进入 →</span>
           </button>

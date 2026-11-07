@@ -1,3 +1,4 @@
+import { getCuratedCatalogStats } from '../astro/eclipses/catalog';
 import { DockLayout, DockPanelId } from './Dock';
 
 interface TourStep {
@@ -7,6 +8,8 @@ interface TourStep {
   mobileTargetSelector?: string;
   openDock?: DockPanelId | null;
 }
+
+const TOUR_CATALOG_TOTAL = getCuratedCatalogStats().total;
 
 const TOUR_STEPS: ReadonlyArray<TourStep> = [
   {
@@ -29,8 +32,8 @@ const TOUR_STEPS: ReadonlyArray<TourStep> = [
     openDock: 'location',
   },
   {
-    title: '第 4/6 步：200 场精选日月食百科与智能回放',
-    desc: '点击右侧「🌑 天象」打开 200 场精选日月食（中国可见优先排序）。点选任一事件会弹出浮动详情卡片，支持点击「初亏/食既/食甚/生光/复圆」任意时刻或一键 60 秒全过程智能慢放！',
+    title: `第 4/6 步：${TOUR_CATALOG_TOTAL} 场精选日月食百科与智能回放`,
+    desc: `点击右侧「🌑 天象」打开 ${TOUR_CATALOG_TOTAL} 场精选日月食（中国可见优先排序）。点选任一事件会弹出浮动详情卡片，支持点击「初亏/食既/食甚/生光/复圆」任意时刻或一键 60 秒全过程智能慢放！`,
     targetSelector: '.ms-dock-right [data-panel="eclipse"]',
     mobileTargetSelector: '[data-mpanel="eclipse"]',
     openDock: 'eclipse',
