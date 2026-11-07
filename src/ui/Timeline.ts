@@ -1,6 +1,6 @@
 import * as Astronomy from 'astronomy-engine';
 import { Solar } from 'lunar-javascript';
-import { AppState } from '../state/AppState';
+import { AppState, MAX_VALID_UTC_MS, MIN_VALID_UTC_MS } from '../state/AppState';
 import { makeAstroTime } from '../astro/ephemeris';
 import { formatDateTime, localPartsToUtc } from '../time/tz';
 
@@ -115,8 +115,12 @@ export class TimelineBar {
   }
 
   public computeTicks(centerUtcMs: number, spanDays: number): TimelineTick[] {
-    const startMs = centerUtcMs - spanDays * 86400 * 1000;
-    const endMs = centerUtcMs + spanDays * 86400 * 1000;
+    if (!Number.isFinite(centerUtcMs) || !Number.isFinite(spanDays) || spanDays <= 0) {
+      return [];
+    }
+    const startMs = Math.max(MIN_VALID_UTC_MS, centerUtcMs - spanDays * 86400 * 1000);
+    const endMs = Math.min(MAX_VALID_UTC_MS, centerUtcMs + spanDays * 86400 * 1000);
+    if (startMs > endMs) return [];
     const ticks: TimelineTick[] = [];
 
     try {
@@ -124,14 +128,18 @@ export class TimelineBar {
       let tNew = Astronomy.SearchMoonPhase(0, makeAstroTime(startMs), spanDays * 2 + 35);
       while (tNew && tNew.date.getTime() <= endMs) {
         const ms = tNew.date.getTime();
-        ticks.push({ utcMs: ms, kind: 'newMoon', label: '朔 (新月)', icon: '🌑' });
+        if (ms >= startMs) {
+          ticks.push({ utcMs: ms, kind: 'newMoon', label: '朔 (新月)', icon: '🌑' });
+        }
         tNew = Astronomy.SearchMoonPhase(0, makeAstroTime(ms + 20 * 86400000), 35);
       }
 
       let tFull = Astronomy.SearchMoonPhase(180, makeAstroTime(startMs), spanDays * 2 + 35);
       while (tFull && tFull.date.getTime() <= endMs) {
         const ms = tFull.date.getTime();
-        ticks.push({ utcMs: ms, kind: 'fullMoon', label: '望 (满月)', icon: '🌕' });
+        if (ms >= startMs) {
+          ticks.push({ utcMs: ms, kind: 'fullMoon', label: '望 (满月)', icon: '🌕' });
+        }
         tFull = Astronomy.SearchMoonPhase(180, makeAstroTime(ms + 20 * 86400000), 35);
       }
 
@@ -139,25 +147,29 @@ export class TimelineBar {
       let sEcl = Astronomy.SearchGlobalSolarEclipse(makeAstroTime(startMs));
       while (sEcl && sEcl.peak.date.getTime() <= endMs) {
         const ms = sEcl.peak.date.getTime();
-        ticks.push({
-          utcMs: ms,
-          kind: 'eclipse',
-          eclipseKind: 'solar',
-          label: '日食食甚',
-          icon: '⚡日食',
-        });
+        if (ms >= startMs) {
+          ticks.push({
+            utcMs: ms,
+            kind: 'eclipse',
+            eclipseKind: 'solar',
+            label: '日食食甚',
+            icon: '⚡日食',
+          });
+        }
         sEcl = Astronomy.SearchGlobalSolarEclipse(makeAstroTime(ms + 20 * 86400000));
       }
       let lEcl = Astronomy.SearchLunarEclipse(makeAstroTime(startMs));
       while (lEcl && lEcl.peak.date.getTime() <= endMs) {
         const ms = lEcl.peak.date.getTime();
-        ticks.push({
-          utcMs: ms,
-          kind: 'eclipse',
-          eclipseKind: 'lunar',
-          label: '月食食甚',
-          icon: '🔴月食',
-        });
+        if (ms >= startMs) {
+          ticks.push({
+            utcMs: ms,
+            kind: 'eclipse',
+            eclipseKind: 'lunar',
+            label: '月食食甚',
+            icon: '🔴月食',
+          });
+        }
         lEcl = Astronomy.SearchLunarEclipse(makeAstroTime(ms + 20 * 86400000));
       }
 
@@ -197,7 +209,9 @@ export class TimelineBar {
                   'Asia/Shanghai'
                 )
               : Date.UTC(dt.getUTCFullYear(), dt.getUTCMonth(), dt.getUTCDate(), 4, 0);
-            ticks.push({ utcMs: ms, kind: 'jieQi', label: `节气·${jq}`, icon: `🌿${jq}` });
+            if (ms >= startMs && ms <= endMs) {
+              ticks.push({ utcMs: ms, kind: 'jieQi', label: `节气·${jq}`, icon: `🌿${jq}` });
+            }
           }
         }
       }

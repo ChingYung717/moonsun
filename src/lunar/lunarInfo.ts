@@ -39,17 +39,22 @@ export interface LunarDetailInfo {
   fullMoonSummaryZh: string;
 }
 
+function safeSolarFromBeijingParts(
+  utcMs: number,
+  bj = utcToLocalParts(utcMs, 'Asia/Shanghai')
+): ReturnType<typeof Solar.fromYmdHms> {
+  try {
+    return Solar.fromYmdHms(bj.year, bj.month, bj.day, bj.hour, bj.minute, bj.second);
+  } catch {
+    // Fallback to Julian Day conversion when proleptic Gregorian dates fall inside the 1582-10-05..14 reform gap
+    return Solar.fromJulianDay((utcMs + 8 * 3600000) / 86400000 + 2440587.5);
+  }
+}
+
 export function computeLunarDetail(utcMs: number): LunarDetailInfo {
   // Official Chinese Lunar Calendar is defined in UTC+8 (Beijing Time)
   const bj = utcToLocalParts(utcMs, 'Asia/Shanghai');
-  const solar = Solar.fromYmdHms(
-    bj.year,
-    bj.month,
-    bj.day,
-    bj.hour,
-    bj.minute,
-    bj.second
-  );
+  const solar = safeSolarFromBeijingParts(utcMs, bj);
   const lunar = solar.getLunar();
 
   const lunarYear = lunar.getYear();
@@ -126,14 +131,7 @@ export function computeLunarDetail(utcMs: number): LunarDetailInfo {
   };
 
   const fmBj = utcToLocalParts(phase.fullMoonUtc, 'Asia/Shanghai');
-  const fmSolar = Solar.fromYmdHms(
-    fmBj.year,
-    fmBj.month,
-    fmBj.day,
-    fmBj.hour,
-    fmBj.minute,
-    fmBj.second
-  );
+  const fmSolar = safeSolarFromBeijingParts(phase.fullMoonUtc, fmBj);
   const fmLunar = fmSolar.getLunar();
   const fullMoonLunarDayNumber = fmLunar.getDay();
   const fullMoonLunarDayNameZh = fmLunar.getDayInChinese();

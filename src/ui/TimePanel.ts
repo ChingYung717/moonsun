@@ -1,5 +1,5 @@
 import * as Astronomy from 'astronomy-engine';
-import { AppState } from '../state/AppState';
+import { AppState, MAX_VALID_UTC_MS, MIN_VALID_UTC_MS } from '../state/AppState';
 import { SimulationClock } from '../time/Clock';
 import {
   formatDateTime,
@@ -177,13 +177,22 @@ export class TimePanel {
       this.state.pushUndoSnapshot('跳到今晚20:00');
       this.state.setTimeUtc(utc, true);
       this.state.update({ playing: false });
-      showToast('已跳转到当地今晚 20:00');
+      if (utc >= MIN_VALID_UTC_MS && utc <= MAX_VALID_UTC_MS) {
+        showToast('已跳转到当地今晚 20:00');
+      }
     });
 
     this.el.querySelector('#q-sunrise')?.addEventListener('click', () => {
       this.setDirty(false);
       const s = this.state.get();
       const nextDayUtc = s.timeUtc + 86400000;
+      if (nextDayUtc > MAX_VALID_UTC_MS) {
+        showToast({
+          message: '⚠️ 已到达支持时间上限（公元 3000 年），无法继续向后搜索次日日出',
+          type: 'warn',
+        });
+        return;
+      }
       const parts = utcToLocalParts(nextDayUtc, s.earthObserver.timezone);
       const rs = computeRiseSetTimes(
         nextDayUtc,
@@ -192,7 +201,7 @@ export class TimePanel {
         parts.offsetMinutes,
         s.earthObserver.elevation
       );
-      if (rs.sunRiseUtc === null) {
+      if (rs.sunRiseUtc === null || rs.sunRiseUtc > MAX_VALID_UTC_MS) {
         const noonUtc = localPartsToUtc(
           parts.year,
           parts.month,
@@ -224,11 +233,24 @@ export class TimePanel {
     this.el.querySelector('#q-next-solar')?.addEventListener('click', () => {
       this.setDirty(false);
       const s = this.state.get();
-      const nextSolar = Astronomy.SearchGlobalSolarEclipse(
-        makeAstroTime(s.timeUtc + 6 * 3600 * 1000)
-      );
+      const searchFrom = s.timeUtc + 6 * 3600 * 1000;
+      if (searchFrom > MAX_VALID_UTC_MS) {
+        showToast({
+          message: '⚠️ 已达支持时间上限（公元 3000 年），支持区间内无后续日食',
+          type: 'warn',
+        });
+        return;
+      }
+      const nextSolar = Astronomy.SearchGlobalSolarEclipse(makeAstroTime(searchFrom));
       if (nextSolar) {
         const peakMs = nextSolar.peak.date.getTime();
+        if (peakMs > MAX_VALID_UTC_MS) {
+          showToast({
+            message: '⚠️ 公元 3000 年底之前无后续全球日食',
+            type: 'warn',
+          });
+          return;
+        }
         this.state.pushUndoSnapshot('跳到下次日食');
         this.state.update({
           timeUtc: peakMs,
@@ -249,11 +271,24 @@ export class TimePanel {
     this.el.querySelector('#q-next-lunar')?.addEventListener('click', () => {
       this.setDirty(false);
       const s = this.state.get();
-      const nextLunar = Astronomy.SearchLunarEclipse(
-        makeAstroTime(s.timeUtc + 6 * 3600 * 1000)
-      );
+      const searchFrom = s.timeUtc + 6 * 3600 * 1000;
+      if (searchFrom > MAX_VALID_UTC_MS) {
+        showToast({
+          message: '⚠️ 已达支持时间上限（公元 3000 年），支持区间内无后续月食',
+          type: 'warn',
+        });
+        return;
+      }
+      const nextLunar = Astronomy.SearchLunarEclipse(makeAstroTime(searchFrom));
       if (nextLunar) {
         const peakMs = nextLunar.peak.date.getTime();
+        if (peakMs > MAX_VALID_UTC_MS) {
+          showToast({
+            message: '⚠️ 公元 3000 年底之前无后续月食',
+            type: 'warn',
+          });
+          return;
+        }
         this.state.pushUndoSnapshot('跳到下次月食');
         this.state.update({
           timeUtc: peakMs,
@@ -306,13 +341,25 @@ export class TimePanel {
       const sec = parseStrict('#in-sec', 0);
       const msgEl = this.el.querySelector<HTMLElement>('#dt-inline-msg');
 
-      if (!isValidCalendarDateTime(y, m, d, h, min, sec)) {
+      const tz = this.state.get().earthObserver.timezone;
+      const isEdgeLocalYear =
+        (y === -2000 || y === 3001) &&
+        isValidCalendarDateTime(2000 + (((y % 400) + 400) % 400), m, d, h, min, sec);
+      const candidateUtc =
+        isValidCalendarDateTime(y, m, d, h, min, sec) || isEdgeLocalYear
+          ? localPartsToUtc(y, m, d, h, min, sec, tz)
+          : NaN;
+
+      if (
+        !Number.isFinite(candidateUtc) ||
+        (isEdgeLocalYear && (candidateUtc < MIN_VALID_UTC_MS || candidateUtc > MAX_VALID_UTC_MS))
+      ) {
         if (msgEl) {
           msgEl.style.display = 'block';
-          msgEl.textContent = '⚠️ 日期不存在或超出有效范围（请检查大小月、平年2月天数或时分秒范围）';
+          msgEl.textContent = '⚠️ 日期不存在或超出有效范围（支持天文年 -1999 至 3000 年，请检查大小月、平年2月天数或时分秒范围）';
         }
         showToast({
-          message: '⚠️ 日期不存在，请检查年月日数值是否有效',
+          message: '⚠️ 日期不存在或超出支持范围，请检查年月日数值是否有效',
           type: 'warn',
         });
         return;
@@ -321,17 +368,8 @@ export class TimePanel {
       if (msgEl) {
         msgEl.style.display = 'none';
       }
-      const utc = localPartsToUtc(
-        y,
-        m,
-        d,
-        h,
-        min,
-        sec,
-        this.state.get().earthObserver.timezone
-      );
       this.state.pushUndoSnapshot('输入时间跳转');
-      this.state.setTimeUtc(utc, true);
+      this.state.setTimeUtc(candidateUtc, true);
       this.setDirty(false);
       this.isFocused = false;
     };

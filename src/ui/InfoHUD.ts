@@ -1,5 +1,5 @@
 import * as Astronomy from 'astronomy-engine';
-import { AppState, escapeHtml } from '../state/AppState';
+import { AppState, escapeHtml, MAX_VALID_UTC_MS } from '../state/AppState';
 import { FrameAstroData } from '../render/Renderer';
 import { computeRiseSetTimes, RiseSetTimes } from '../astro/observer';
 import { computeLunarEclipseShadow } from '../astro/eclipses/obscuration';
@@ -50,11 +50,24 @@ export class InfoHUD {
       if (jumpBtn) {
         e.stopPropagation();
         const s = this.state.get();
-        const nextSolar = Astronomy.SearchGlobalSolarEclipse(
-          makeAstroTime(s.timeUtc + 6 * 3600 * 1000)
-        );
+        const searchFrom = s.timeUtc + 6 * 3600 * 1000;
+        if (searchFrom > MAX_VALID_UTC_MS) {
+          showToast({
+            message: '⚠️ 已达支持时间上限（公元 3000 年），支持区间内无后续日食',
+            type: 'warn',
+          });
+          return;
+        }
+        const nextSolar = Astronomy.SearchGlobalSolarEclipse(makeAstroTime(searchFrom));
         if (nextSolar) {
           const peakMs = nextSolar.peak.date.getTime();
+          if (peakMs > MAX_VALID_UTC_MS) {
+            showToast({
+              message: '⚠️ 公元 3000 年底之前无后续全球日食',
+              type: 'warn',
+            });
+            return;
+          }
           this.state.pushUndoSnapshot('从数据栏跳转下次日食');
           this.state.update({
             timeUtc: peakMs,

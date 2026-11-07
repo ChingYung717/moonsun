@@ -525,4 +525,268 @@ describe('Round-1 regressions', () => {
     st.setTimeUtc(5000, true);
     expect(st.get().eclipseReplay).toBeNull();
   });
+
+  it('enforces unified time range [-1999, 3000] across AppState, SimulationClock, URL parsing, and TimelineBar (MS-01)', async () => {
+    const {
+      AppState,
+      MIN_VALID_UTC_MS,
+      MAX_VALID_UTC_MS,
+      parseUrlInitialState,
+      utcCalendarDateMs,
+    } = await import('../src/state/AppState');
+    const { SimulationClock } = await import('../src/time/Clock');
+    const { computeMoonPhase } = await import('../src/astro/phase');
+    const { computeEarthObserverSky } = await import('../src/astro/observer');
+    const { TimelineBar } = await import('../src/ui/Timeline');
+
+    // Verify year 0 uses setUTCFullYear(0) -> -62167219200000, not 1900
+    expect(new Date(utcCalendarDateMs(0, 0, 1)).getUTCFullYear()).toBe(0);
+    expect(new Date(MIN_VALID_UTC_MS).getUTCFullYear()).toBe(-1999);
+    expect(new Date(MAX_VALID_UTC_MS).getUTCFullYear()).toBe(3000);
+
+    const boundaryHits: Array<'min' | 'max'> = [];
+    const st = new AppState({ timeUtc: Date.UTC(2026, 0, 1) });
+    st.onTimeBoundaryReached((b) => boundaryHits.push(b));
+
+    // 1. Non-finite inputs (NaN / ±Infinity) are rejected and keep previous timeUtc without firing boundary callback
+    st.setTimeUtc(Number.NaN);
+    expect(st.get().timeUtc).toBe(Date.UTC(2026, 0, 1));
+    st.update({ timeUtc: Number.POSITIVE_INFINITY });
+    expect(st.get().timeUtc).toBe(Date.UTC(2026, 0, 1));
+    st.update({ timeUtc: Number.NEGATIVE_INFINITY });
+    expect(st.get().timeUtc).toBe(Date.UTC(2026, 0, 1));
+    expect(boundaryHits).toEqual([]);
+
+    // 2. Finite out-of-range inputs clamp to MAX_VALID_UTC_MS / MIN_VALID_UTC_MS, pause playback, exit realtime, and fire once
+    st.update({ playing: true, isRealtimeSync: true, speedMultiplier: 2548800 });
+    st.setTimeUtc(MAX_VALID_UTC_MS + 86_400_000, false);
+    expect(st.get().timeUtc).toBe(MAX_VALID_UTC_MS);
+    expect(st.get().playing).toBe(false);
+    expect(st.get().isRealtimeSync).toBe(false);
+    expect(boundaryHits).toEqual(['max']);
+
+    // Repeated hits at same boundary do not spam callback
+    st.setTimeUtc(MAX_VALID_UTC_MS + 999_999, false);
+    expect(boundaryHits).toEqual(['max']);
+
+    // Re-entering valid interior resets latch, then hitting MIN_VALID_UTC_MS fires 'min'
+    st.setTimeUtc(utcCalendarDateMs(0, 0, 1));
+    expect(new Date(st.get().timeUtc).getUTCFullYear()).toBe(0);
+    st.update({ timeUtc: MIN_VALID_UTC_MS - 86_400_000, playing: true });
+    expect(st.get().timeUtc).toBe(MIN_VALID_UTC_MS);
+    expect(st.get().playing).toBe(false);
+    expect(boundaryHits).toEqual(['max', 'min']);
+
+    // 3. SimulationClock max speed tick near MAX_VALID_UTC_MS clamps safely and pauses
+    const clock = new SimulationClock(st);
+    st.update({
+      timeUtc: MAX_VALID_UTC_MS - 10_000,
+      playing: true,
+      isRealtimeSync: false,
+      speedMultiplier: 2548800,
+    });
+    clock.tick(1000);
+    clock.tick(1016.6); // 16.6ms frame at 2548800x -> ~42.3M ms > 10_000ms remaining
+    expect(st.get().timeUtc).toBe(MAX_VALID_UTC_MS);
+    expect(st.get().playing).toBe(false);
+
+    // Ephemeris, MoonPhase, Observer, LunarDetail, and TimelineBar all succeed at exact boundaries MIN_VALID_UTC_MS, year 0, October 1582 Gregorian reform gap, and MAX_VALID_UTC_MS
+    const { computeLunarDetail } = await import('../src/lunar/lunarInfo');
+    for (const boundMs of [
+      MIN_VALID_UTC_MS,
+      utcCalendarDateMs(0, 0, 1, 12, 0, 0),
+      utcCalendarDateMs(1582, 9, 4, 12, 0, 0),
+      utcCalendarDateMs(1582, 9, 10, 12, 0, 0),
+      utcCalendarDateMs(1582, 9, 15, 12, 0, 0),
+      MAX_VALID_UTC_MS,
+    ]) {
+      expect(() => computeEphemeris(boundMs)).not.toThrow();
+      expect(() => computeMoonPhase(boundMs)).not.toThrow();
+      expect(() => computeEarthObserverSky(boundMs, 39.9, 116.4, 0)).not.toThrow();
+      expect(() => computeLunarDetail(boundMs)).not.toThrow();
+      const ticks = TimelineBar.prototype.computeTicks(boundMs, 180);
+      const winStart = Math.max(MIN_VALID_UTC_MS, boundMs - 180 * 86400 * 1000);
+      const winEnd = Math.min(MAX_VALID_UTC_MS, boundMs + 180 * 86400 * 1000);
+      for (const tick of ticks) {
+        expect(tick.utcMs).toBeGreaterThanOrEqual(winStart);
+        expect(tick.utcMs).toBeLessThanOrEqual(winEnd);
+      }
+    }
+
+    // 4. URL parser rejects invalid dates, clamps finite years outside [-1999, 3000] to boundaries, and notifies boundary listeners
+    const urlBoundaryHits: Array<'min' | 'max'> = [];
+    const stUrl = new AppState({ timeUtc: Date.UTC(2026, 5, 1) });
+    stUrl.onTimeBoundaryReached((b) => urlBoundaryHits.push(b));
+    expect(parseUrlInitialState(stUrl, '?t=not-a-valid-date').hasTime).toBe(false);
+    expect(stUrl.get().timeUtc).toBe(Date.UTC(2026, 5, 1));
+    expect(parseUrlInitialState(stUrl, '?t=3005-01-01T00:00:00.000Z').hasTime).toBe(true);
+    expect(stUrl.get().timeUtc).toBe(MAX_VALID_UTC_MS);
+    expect(urlBoundaryHits).toEqual(['max']);
+    expect(parseUrlInitialState(stUrl, '?t=-2005-01-01T00:00:00.000Z').hasTime).toBe(true);
+    expect(stUrl.get().timeUtc).toBe(MIN_VALID_UTC_MS);
+    expect(urlBoundaryHits).toEqual(['max', 'min']);
+    expect(parseUrlInitialState(stUrl, '?t=3000-12-31T12:00:00.000Z').hasTime).toBe(true);
+    expect(new Date(stUrl.get().timeUtc).getUTCFullYear()).toBe(3000);
+  });
+
+  it('FrameRunner catches unexpected frame errors, pauses without retry spam, and recovers via recoverToNow, clock.resetToNow, or explicit user time jump (MS-01)', async () => {
+    const { AppState } = await import('../src/state/AppState');
+    const { SimulationClock, FrameRunner } = await import('../src/time/Clock');
+
+    const safeInitialMs = Date.UTC(2026, 3, 15, 12, 0, 0);
+    const st = new AppState({
+      timeUtc: safeInitialMs,
+      playing: true,
+      isRealtimeSync: false,
+      speedMultiplier: 3600,
+    });
+    const clock = new SimulationClock(st);
+    const errorsCaught: unknown[] = [];
+    let shouldThrowNextFrame = false;
+    let frameCallbackCount = 0;
+
+    const runner = new FrameRunner(
+      st,
+      clock,
+      () => {
+        frameCallbackCount++;
+        if (shouldThrowNextFrame) {
+          st.setTimeUtc(Date.UTC(2029, 0, 1), false);
+          throw new Error('simulated WebGL/ephemeris frame crash');
+        }
+      },
+      (err) => errorsCaught.push(err)
+    );
+
+    // Frame 1 succeeds and records lastValidTimeUtc
+    const r1 = runner.runFrame(1000);
+    expect(r1).toBe(true);
+    expect(runner.isPausedOnError()).toBe(false);
+    expect(frameCallbackCount).toBe(1);
+
+    // Frame 2 mutates timeUtc then throws an unexpected error
+    shouldThrowNextFrame = true;
+    const r2 = runner.runFrame(1016);
+    expect(r2).toBe(false);
+    expect(runner.isPausedOnError()).toBe(true);
+    expect(runner.getErrorCount()).toBe(1);
+    expect(errorsCaught.length).toBe(1);
+    expect(st.get().playing).toBe(false);
+    expect(st.get().isRealtimeSync).toBe(false);
+    // Restored to last valid frame timestamp
+    expect(st.get().timeUtc).toBe(runner.getLastValidTimeUtc());
+
+    // Subsequent frames while paused on error skip execution and do not spam error callback
+    const r3 = runner.runFrame(1032);
+    expect(r3).toBe(false);
+    expect(frameCallbackCount).toBe(2);
+    expect(errorsCaught.length).toBe(1);
+
+    // Clicking "回到现在" (recoverToNow) clears error lock and resumes normal frames
+    shouldThrowNextFrame = false;
+    runner.recoverToNow();
+    expect(runner.isPausedOnError()).toBe(false);
+    expect(st.get().isRealtimeSync).toBe(true);
+
+    const r4 = runner.runFrame(1048);
+    expect(r4).toBe(true);
+    expect(frameCallbackCount).toBe(3);
+
+    // Another error followed by an explicit user time jump (e.g. TimePanel / Timeline / EclipsePanel) also clears the error lock
+    shouldThrowNextFrame = true;
+    expect(runner.runFrame(1064)).toBe(false);
+    expect(runner.isPausedOnError()).toBe(true);
+    shouldThrowNextFrame = false;
+    st.setTimeUtc(Date.UTC(2026, 7, 12, 17, 46, 0), true);
+    expect(runner.isPausedOnError()).toBe(false);
+    expect(runner.runFrame(1080)).toBe(true);
+  });
+
+  it('caches synodic month phase milestones in computeMoonPhase with 100% numerical fidelity across all playback modes (MS-06)', async () => {
+    const {
+      computeMoonPhase,
+      computeMoonPhaseUncached,
+      getMoonPhaseCacheStats,
+      resetMoonPhaseCache,
+    } = await import('../src/astro/phase');
+
+    resetMoonPhaseCache();
+    expect(getMoonPhaseCacheStats()).toEqual({
+      hits: 0,
+      misses: 0,
+      searchCalls: 0,
+      cachedCycles: 0,
+    });
+
+    const expectPhaseMatch = (a: ReturnType<typeof computeMoonPhase>, b: ReturnType<typeof computeMoonPhase>) => {
+      expect(a.phaseAngleDeg).toBeCloseTo(b.phaseAngleDeg, 12);
+      expect(a.illuminatedFraction).toBeCloseTo(b.illuminatedFraction, 12);
+      expect(a.lunarAgeDays).toBe(b.lunarAgeDays);
+      expect(a.phaseNameZh).toBe(b.phaseNameZh);
+      expect(a.phaseAliasZh).toBe(b.phaseAliasZh);
+      expect(a.prevNewMoonUtc).toBe(b.prevNewMoonUtc);
+      expect(a.nextNewMoonUtc).toBe(b.nextNewMoonUtc);
+      expect(a.firstQuarterUtc).toBe(b.firstQuarterUtc);
+      expect(a.fullMoonUtc).toBe(b.fullMoonUtc);
+      expect(a.thirdQuarterUtc).toBe(b.thirdQuarterUtc);
+    };
+
+    // 1. Normal playback (120 frames advancing 1 second per frame inside 2026-10 synodic month)
+    const startUtc = Date.UTC(2026, 9, 20, 0, 0, 0);
+    for (let i = 0; i < 120; i++) {
+      const t = startUtc + i * 1000;
+      const cached = computeMoonPhase(t);
+      const uncached = computeMoonPhaseUncached(t);
+      expectPhaseMatch(cached, uncached);
+    }
+    const statsAfterNormal = getMoonPhaseCacheStats();
+    expect(statsAfterNormal.misses).toBe(1);
+    expect(statsAfterNormal.hits).toBe(119);
+    expect(statsAfterNormal.searchCalls).toBe(5);
+
+    // 2. Paused state (repeated calls at the exact same timestamp)
+    for (let i = 0; i < 30; i++) {
+      expectPhaseMatch(computeMoonPhase(startUtc), computeMoonPhaseUncached(startUtc));
+    }
+    expect(getMoonPhaseCacheStats().misses).toBe(1);
+    expect(getMoonPhaseCacheStats().hits).toBe(149);
+    expect(getMoonPhaseCacheStats().searchCalls).toBe(5);
+
+    // 3. Crossing New Moon forward and reverse
+    const initialSnap = computeMoonPhase(startUtc);
+    const nextNewMoon = initialSnap.nextNewMoonUtc;
+    const beforeNewMoon = computeMoonPhase(nextNewMoon - 30_000);
+    expectPhaseMatch(beforeNewMoon, computeMoonPhaseUncached(nextNewMoon - 30_000));
+    expect(getMoonPhaseCacheStats().misses).toBe(1);
+
+    // Step across nextNewMoonUtc -> triggers(1) cache miss for the new synodic cycle
+    const afterNewMoon = computeMoonPhase(nextNewMoon + 30_000);
+    expectPhaseMatch(afterNewMoon, computeMoonPhaseUncached(nextNewMoon + 30_000));
+    expect(getMoonPhaseCacheStats().misses).toBe(2);
+    expect(afterNewMoon.prevNewMoonUtc).toBe(nextNewMoon);
+
+    // Step backward across nextNewMoonUtc into the cached cycle -> hits LRU cycle cache!
+    const reverseIntoCachedCycle = computeMoonPhase(nextNewMoon - 10_000);
+    expectPhaseMatch(reverseIntoCachedCycle, computeMoonPhaseUncached(nextNewMoon - 10_000));
+    expect(getMoonPhaseCacheStats().misses).toBe(2);
+
+    // Step backward across initialSnap.prevNewMoonUtc into an earlier unvisited synodic cycle -> cache miss (misses = 3)
+    const prevNewMoon = initialSnap.prevNewMoonUtc;
+    const reverseBeforePrevNewMoon = computeMoonPhase(prevNewMoon - 10_000);
+    expectPhaseMatch(reverseBeforePrevNewMoon, computeMoonPhaseUncached(prevNewMoon - 10_000));
+    expect(getMoonPhaseCacheStats().misses).toBe(3);
+    expect(reverseBeforePrevNewMoon.nextNewMoonUtc).toBe(prevNewMoon);
+
+    // 4. Max speed & multi-century jumps match computeMoonPhaseUncached identically
+    const centurySamples = [
+      Date.UTC(-708, 6, 17, 7, 0, 0),
+      Date.UTC(2009, 6, 22, 2, 35, 0),
+      Date.UTC(2025, 8, 7, 18, 11, 0),
+      Date.UTC(2999, 5, 15, 0, 0, 0),
+    ];
+    for (const t of centurySamples) {
+      expectPhaseMatch(computeMoonPhase(t), computeMoonPhaseUncached(t));
+    }
+  });
 });
+
