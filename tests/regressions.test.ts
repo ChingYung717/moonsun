@@ -1194,6 +1194,32 @@ describe('Round-1 regressions', () => {
       expect(badge.textContent).toContain('🔥 食既~生光自动慢放');
       expect(badge.textContent).not.toContain('⏸ 已暂停');
 
+      // While focus is on #replay-scrubber (<input type="range">), view shortcuts 1/2/3 work, while ArrowRight is reserved for range stepping (does not clear eclipseReplay)
+      mockWin.dispatchKeydown({ code: 'Digit1', key: '1' });
+      expect(state.get().viewMode).toBe('space');
+      mockWin.dispatchKeydown({ code: 'Digit2', key: '2' });
+      expect(state.get().viewMode).toBe('ground');
+      mockWin.dispatchKeydown({ code: 'ArrowRight', key: 'ArrowRight' });
+      expect(state.get().eclipseReplay?.active).toBe(true);
+
+      // Speed selects in TopBar & TimePanel reflect the dynamic replay speed via custom option (never blank)
+      const topSpeedSel = (topBar.el as unknown as TrackedMockEl).querySelector(
+        '#top-speed-select'
+      );
+      const topSpeedCustom = (topBar.el as unknown as TrackedMockEl).querySelector(
+        '#top-speed-custom-opt'
+      );
+      const panelSpeedSel = (timePanel.el as unknown as TrackedMockEl).querySelector(
+        '#speed-select'
+      );
+      const panelSpeedCustom = (timePanel.el as unknown as TrackedMockEl).querySelector(
+        '#speed-custom-opt'
+      );
+      expect(topSpeedSel.value).toBe(String(state.get().speedMultiplier));
+      expect(topSpeedCustom.style.display).toBe('block');
+      expect(panelSpeedSel.value).toBe(String(state.get().speedMultiplier));
+      expect(panelSpeedCustom.style.display).toBe('block');
+
       // By contrast, when focus is on a text input (#ecl-query), Space does NOT toggle playback
       const queryInput = (eclipsePanel.el as unknown as TrackedMockEl).querySelector('#ecl-query');
       mockDoc.activeElement = queryInput;
@@ -1251,12 +1277,16 @@ describe('Round-1 regressions', () => {
       expect(badge.textContent).toBe('✅ 已复圆结束');
       expect(scrubber.value).toBe('1000');
 
-      // 3d. After natural completion, scrubbing back to 250 (< endUtcMs) reactivates replay in paused state, and clicking #top-play-btn resumes it
+      // 3d. After natural completion, scrubbing back to 250 (< endUtcMs) reactivates replay in paused state in a single atomic update, and clicking #top-play-btn resumes it
+      timePanelSpy.mockClear();
+      eclipseReplaySpy.mockClear();
       scrubber.value = '250';
       scrubber.trigger('input');
       expect(state.get().eclipseReplay?.active).toBe(true);
       expect(state.get().playing).toBe(false);
       expect(badge.textContent).toContain('⏸ 已暂停 · ⏩ 偏食阶段快进');
+      expect(timePanelSpy).toHaveBeenCalledTimes(1);
+      expect(eclipseReplaySpy).toHaveBeenCalledTimes(1);
 
       topPlayBtn.trigger('click');
       expect(state.get().playing).toBe(true);
@@ -1277,6 +1307,10 @@ describe('Round-1 regressions', () => {
       expect(state.get().playing).toBe(true);
       expect(state.get().eclipseReplay).toBeNull();
       expect(state.get().speedMultiplier).toBe(1);
+      expect(topSpeedSel.value).toBe('1');
+      expect(topSpeedCustom.style.display).toBe('none');
+      expect(panelSpeedSel.value).toBe('1');
+      expect(panelSpeedCustom.style.display).toBe('none');
       expect(progWrap.style.display).toBe('none');
       expect(badge.textContent).toBe('');
     } finally {

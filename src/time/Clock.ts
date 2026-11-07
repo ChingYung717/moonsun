@@ -160,11 +160,18 @@ export function shouldIgnoreGlobalKeydown(
       typeof (activeEl as { type?: unknown }).type === 'string'
         ? (activeEl as { type: string }).type.toLowerCase()
         : '';
-    if (
-      inputType === 'range' &&
-      (e.code === 'Space' || e.key === ' ' || e.key === 'h' || e.key === 'H')
-    ) {
-      return false;
+    if (inputType === 'range') {
+      const rangeSteppingKeys = new Set([
+        'ArrowLeft',
+        'ArrowRight',
+        'ArrowUp',
+        'ArrowDown',
+        'Home',
+        'End',
+        'PageUp',
+        'PageDown',
+      ]);
+      return rangeSteppingKeys.has(e.key);
     }
     return true;
   }
@@ -256,11 +263,20 @@ export class SimulationClock {
       this.state.setTimeUtc(Date.now(), false);
     } else if (Number.isFinite(s.speedMultiplier)) {
       const rawNextUtc = s.timeUtc + dtSec * 1000 * s.speedMultiplier;
-      const nextUtc =
-        s.eclipseReplay?.active && s.speedMultiplier > 0
-          ? Math.min(rawNextUtc, s.eclipseReplay.endUtcMs)
-          : rawNextUtc;
-      this.state.setTimeUtc(nextUtc, false);
+      if (
+        s.eclipseReplay?.active &&
+        s.speedMultiplier > 0 &&
+        rawNextUtc >= s.eclipseReplay.endUtcMs
+      ) {
+        this.state.update({
+          timeUtc: s.eclipseReplay.endUtcMs,
+          playing: false,
+          isRealtimeSync: false,
+          eclipseReplay: { ...s.eclipseReplay, active: false },
+        });
+        return;
+      }
+      this.state.setTimeUtc(rawNextUtc, false);
     }
 
     if (this.state.get().eclipseReplay?.active) {

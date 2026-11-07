@@ -104,6 +104,7 @@ export class TopBar {
             <option value="3600">1小时/秒</option>
             <option value="86400">1天/秒</option>
             <option value="2548800">1月/秒</option>
+            <option value="__custom__" id="top-speed-custom-opt" style="display:none;"></option>
           </select>
           <button type="button" class="top-btn top-undo-btn" id="top-undo-btn" style="display:none;" aria-label="返回上一次时间或位置" title="撤销最近一次天象或地点跳转 (快捷键 Backspace)">↩ 返回</button>
         </div>
@@ -329,7 +330,18 @@ export class TopBar {
 
     const topSpeedSel = this.el.querySelector<HTMLSelectElement>('#top-speed-select')!;
     const speedStr = String(s.speedMultiplier);
-    if (Array.from(topSpeedSel.options ?? []).some((o) => o.value === speedStr)) {
+    const topCustomOpt = this.el.querySelector<HTMLOptionElement>('#top-speed-custom-opt');
+    const topPresetSpeeds = ['1', '60', '3600', '86400', '2548800'];
+    if (topPresetSpeeds.includes(speedStr)) {
+      if (topCustomOpt && topCustomOpt.style.display !== 'none') {
+        topCustomOpt.style.display = 'none';
+      }
+    } else if (topCustomOpt) {
+      topCustomOpt.value = speedStr;
+      topCustomOpt.textContent = `${s.speedMultiplier}× (回放)`;
+      topCustomOpt.style.display = 'block';
+    }
+    if (topSpeedSel.value !== speedStr) {
       topSpeedSel.value = speedStr;
     }
 

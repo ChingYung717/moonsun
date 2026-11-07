@@ -226,6 +226,7 @@ export class TimelineBar {
 
   public refreshDisplay(): void {
     const s = this.state.get();
+    if (s.uiHidden) return;
     const nowUtc = s.timeUtc;
     const tz = s.earthObserver.timezone;
 

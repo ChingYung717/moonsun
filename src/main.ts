@@ -176,12 +176,23 @@ function bootstrap(): void {
   }
 
   let lastUiRefresh = -Infinity;
+  let lastPanelSyncedUtc = -Infinity;
+  let needsHudRefresh = true;
 
   state.subscribe((s, changed) => {
     if (changed.has('uiHidden')) {
       uiRoot.classList.toggle('ui-hidden', s.uiHidden);
       if (!s.uiHidden) {
+        // TimePanel, TimelineBar, and EclipsePanel already synced synchronously
+        // via their own state.subscribe(uiHidden) handlers at s.timeUtc.
+        lastPanelSyncedUtc = s.timeUtc;
+        needsHudRefresh = true;
         lastUiRefresh = -Infinity;
+      }
+    } else if (!s.uiHidden) {
+      needsHudRefresh = true;
+      if (!s.playing && changed.has('timeUtc')) {
+        lastPanelSyncedUtc = s.timeUtc;
       }
     }
     if (changed.has('uiMode')) {
@@ -206,21 +217,29 @@ function bootstrap(): void {
     state,
     clock,
     (now) => {
-      const shouldRefreshUi = !state.get().uiHidden && now - lastUiRefresh > 80;
+      const s = state.get();
+      const shouldRefreshUi =
+        !s.uiHidden && (s.playing || needsHudRefresh) && now - lastUiRefresh > 80;
       const frameData = renderer.renderFrame(shouldRefreshUi);
 
       // Throttle DOM updates to ~12 Hz for silky 60fps 3D rendering
       if (shouldRefreshUi) {
-        timePanel.refreshDisplay();
+        if (s.timeUtc !== lastPanelSyncedUtc) {
+          timePanel.refreshDisplay();
+          timeline.refreshDisplay();
+          eclipsePanel.refreshReplayProgress();
+          lastPanelSyncedUtc = s.timeUtc;
+        }
         lunarPanel.refreshDisplay(frameData);
         infoHud.refreshDisplay(frameData);
-        timeline.refreshDisplay();
-        eclipsePanel.refreshReplayProgress();
+        needsHudRefresh = false;
         lastUiRefresh = now;
       }
     },
     (_err, recoverToNow) => {
       lastUiRefresh = -Infinity;
+      lastPanelSyncedUtc = -Infinity;
+      needsHudRefresh = true;
       timePanel.refreshDisplay();
       showToast({
         message: '⚠️ 模拟计算遇到异常，已自动暂停并保留最后有效画面',
@@ -229,6 +248,8 @@ function bootstrap(): void {
         actionLabel: '⚡ 回到现在',
         onAction: () => {
           lastUiRefresh = -Infinity;
+          lastPanelSyncedUtc = -Infinity;
+          needsHudRefresh = true;
           recoverToNow();
           timePanel.refreshDisplay();
           showToast('已恢复并同步至当前真实时间');

@@ -46,6 +46,8 @@ export class EclipsePanel {
   private currentContacts: EclipseContactPoint[] = [];
   private currentContactSite: EclipseContactSite | null = null;
   private onEventSelectedCallback: (() => void) | null = null;
+  private pendingHiddenCardSync = false;
+  private pendingHiddenListSync = false;
 
   public onEventSelected(cb: () => void): void {
     this.onEventSelectedCallback = cb;
@@ -65,7 +67,11 @@ export class EclipsePanel {
     this.render();
     this.state.subscribe((s, changed) => {
       if (changed.has('uiMode')) {
-        this.renderCuratedList();
+        if (s.uiHidden) {
+          this.pendingHiddenListSync = true;
+        } else {
+          this.renderCuratedList();
+        }
       }
       let cardRenderedForSelection = false;
       let lockSyncedForSelection = false;
@@ -75,14 +81,22 @@ export class EclipsePanel {
           this.currentContacts = [];
           this.currentContactSite = null;
           this.isFloatingCardOpen = false;
-          this.floatingCardEl.style.display = 'none';
+          if (s.uiHidden) {
+            this.pendingHiddenCardSync = true;
+          } else {
+            this.floatingCardEl.style.display = 'none';
+          }
         } else if (this.selectedEvent?.id !== s.selectedEclipseId) {
           const resolved = this.resolveEventById(s.selectedEclipseId);
           if (resolved) {
             this.selectedEvent = resolved;
             this.isFloatingCardOpen = true;
-            this.renderFloatingCard(resolved);
-            cardRenderedForSelection = true;
+            if (s.uiHidden) {
+              this.pendingHiddenCardSync = true;
+            } else {
+              this.renderFloatingCard(resolved);
+              cardRenderedForSelection = true;
+            }
             if (s.viewMode === 'ground') {
               this.renderer.groundView.setLockTarget(resolved.kind === 'solar' ? 'sun' : 'moon');
               lockSyncedForSelection = true;
@@ -92,13 +106,25 @@ export class EclipsePanel {
             }
           }
         }
-        this.syncSelectedHighlightInLists();
+        if (s.uiHidden) {
+          this.pendingHiddenListSync = true;
+        } else {
+          this.syncSelectedHighlightInLists();
+        }
       }
       if (!lockSyncedForSelection) {
-        if (changed.has('groundLockTarget') && s.viewMode === 'ground') {
+        if (
+          changed.has('groundLockTarget') &&
+          s.viewMode === 'ground' &&
+          this.renderer.groundView.lockTarget !== s.groundLockTarget
+        ) {
           this.renderer.groundView.setLockTarget(s.groundLockTarget);
         }
-        if (changed.has('moonLockTarget') && s.viewMode === 'moon') {
+        if (
+          changed.has('moonLockTarget') &&
+          s.viewMode === 'moon' &&
+          this.renderer.moonSurfaceView.lockTarget !== s.moonLockTarget
+        ) {
           this.renderer.moonSurfaceView.setLockTarget(s.moonLockTarget);
         }
       }
@@ -108,15 +134,41 @@ export class EclipsePanel {
         this.selectedEvent &&
         this.isFloatingCardOpen
       ) {
-        this.renderFloatingCard(this.selectedEvent);
+        if (s.uiHidden) {
+          this.pendingHiddenCardSync = true;
+        } else {
+          this.renderFloatingCard(this.selectedEvent);
+          cardRenderedForSelection = true;
+        }
       }
-      if (
-        !s.uiHidden &&
-        (changed.has('uiHidden') ||
-          changed.has('eclipseReplay') ||
-          (s.eclipseReplay && (changed.has('speedMultiplier') || changed.has('playing'))))
-      ) {
-        this.refreshReplayProgress();
+      if (!s.uiHidden) {
+        if (changed.has('uiHidden')) {
+          if (this.pendingHiddenListSync) {
+            this.pendingHiddenListSync = false;
+            this.renderCuratedList();
+            this.syncSelectedHighlightInLists();
+          }
+          if (this.pendingHiddenCardSync) {
+            this.pendingHiddenCardSync = false;
+            if (this.isFloatingCardOpen && this.selectedEvent) {
+              this.renderFloatingCard(this.selectedEvent);
+              cardRenderedForSelection = true;
+            } else {
+              this.floatingCardEl.style.display = 'none';
+            }
+          }
+        }
+        if (
+          !cardRenderedForSelection &&
+          (changed.has('uiHidden') ||
+            changed.has('eclipseReplay') ||
+            (s.eclipseReplay &&
+              (changed.has('speedMultiplier') ||
+                changed.has('playing') ||
+                (changed.has('timeUtc') && !s.playing))))
+        ) {
+          this.refreshReplayProgress();
+        }
       }
     });
   }
@@ -952,17 +1004,20 @@ export class EclipsePanel {
       const prevRep = s.eclipseReplay;
       const prevSpeed = s.speedMultiplier;
       const prevPlaying = s.playing;
-      this.state.setTimeUtc(targetUtc, true, true);
+      const prevTimeUtc = s.timeUtc;
+      const subscriberWillRefresh =
+        updatedRep !== prevRep ||
+        metrics.desiredSpeed !== prevSpeed ||
+        nextPlaying !== prevPlaying ||
+        (!nextPlaying && targetUtc !== prevTimeUtc);
       this.state.update({
+        timeUtc: targetUtc,
+        isRealtimeSync: false,
         eclipseReplay: updatedRep,
         speedMultiplier: metrics.desiredSpeed,
         ...(shouldBeActive ? {} : { playing: false }),
       });
-      if (
-        updatedRep === prevRep &&
-        metrics.desiredSpeed === prevSpeed &&
-        nextPlaying === prevPlaying
-      ) {
+      if (!subscriberWillRefresh) {
         this.refreshReplayProgress();
       }
     });

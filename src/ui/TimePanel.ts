@@ -137,6 +137,7 @@ export class TimePanel {
             <option value="86400">⏩ 1天/秒 (看月球公转与月相)</option>
             <option value="604800">⏩ 1周/秒</option>
             <option value="2548800">⏩ 1朔望月/秒</option>
+            <option value="__custom__" id="speed-custom-opt" style="display:none;"></option>
           </select>
         </div>
 
@@ -476,8 +477,32 @@ export class TimePanel {
     playBtn.classList.toggle('paused', !s.playing);
 
     const speedSel = this.el.querySelector<HTMLSelectElement>('#speed-select')!;
-    if (String(s.speedMultiplier) !== speedSel.value) {
-      speedSel.value = String(s.speedMultiplier);
+    const speedStr = String(s.speedMultiplier);
+    const speedCustomOpt = this.el.querySelector<HTMLOptionElement>('#speed-custom-opt');
+    const panelPresetSpeeds = [
+      '-2592000',
+      '-86400',
+      '-3600',
+      '-60',
+      '1',
+      '60',
+      '600',
+      '3600',
+      '86400',
+      '604800',
+      '2548800',
+    ];
+    if (panelPresetSpeeds.includes(speedStr)) {
+      if (speedCustomOpt && speedCustomOpt.style.display !== 'none') {
+        speedCustomOpt.style.display = 'none';
+      }
+    } else if (speedCustomOpt) {
+      speedCustomOpt.value = speedStr;
+      speedCustomOpt.textContent = `⏩ ${s.speedMultiplier}× (智能回放)`;
+      speedCustomOpt.style.display = 'block';
+    }
+    if (speedStr !== speedSel.value) {
+      speedSel.value = speedStr;
     }
   }
 }

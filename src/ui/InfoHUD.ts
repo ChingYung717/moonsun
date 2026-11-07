@@ -13,6 +13,7 @@ export class InfoHUD {
   private expanded = false;
   private lastRiseSetKey = '';
   private cachedRiseSet: RiseSetTimes | null = null;
+  private lastFrame: FrameAstroData | null = null;
 
   constructor(private state: AppState) {
     this.el = document.createElement('footer');
@@ -43,6 +44,9 @@ export class InfoHUD {
       const label = this.el.querySelector<HTMLElement>('#hud-toggle-label')!;
       grid.style.display = this.expanded ? 'grid' : 'none';
       label.textContent = this.expanded ? '收起详情 ▾' : '展开详情 ▴';
+      if (this.expanded && this.lastFrame) {
+        this.refreshDisplay(this.lastFrame);
+      }
     });
 
     this.el.addEventListener('click', (e) => {
@@ -88,7 +92,9 @@ export class InfoHUD {
   }
 
   public refreshDisplay(frame: FrameAstroData): void {
+    this.lastFrame = frame;
     const s = this.state.get();
+    if (s.uiHidden) return;
     const tz = s.earthObserver.timezone;
     const sky = frame.earthSky;
     const lunarShadow = computeLunarEclipseShadow(frame.eph.sunEclKm, frame.eph.moonEclKm);

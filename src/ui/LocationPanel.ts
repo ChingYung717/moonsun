@@ -14,8 +14,7 @@ export class LocationPanel {
       if (
         changed.has('uiHidden') ||
         changed.has('earthObserver') ||
-        changed.has('moonObserver') ||
-        changed.has('viewMode')
+        changed.has('moonObserver')
       ) {
         this.syncUI();
       }
@@ -233,7 +232,9 @@ export class LocationPanel {
   }
 
   private syncUI(): void {
-    const obs = this.state.get().earthObserver;
+    const s = this.state.get();
+    if (s.uiHidden) return;
+    const obs = s.earthObserver;
     const latStr = obs.lat >= 0 ? `${obs.lat.toFixed(2)}°N` : `${(-obs.lat).toFixed(2)}°S`;
     const lonStr = obs.lon >= 0 ? `${obs.lon.toFixed(2)}°E` : `${(-obs.lon).toFixed(2)}°W`;
 

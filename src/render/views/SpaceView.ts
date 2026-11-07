@@ -91,13 +91,13 @@ export class SpaceView {
 
   public setHudVisible(visible: boolean): void {
     if (!visible) {
-      if (this.markerLayerEl) {
+      if (this.markerLayerEl && this.markerLayerEl.style.display !== 'none') {
         this.markerLayerEl.style.display = 'none';
       }
-      if (this.moonMarkerBtn) {
+      if (this.moonMarkerBtn && this.moonMarkerBtn.style.display !== 'none') {
         this.moonMarkerBtn.style.display = 'none';
       }
-      if (this.sunMarkerBtn) {
+      if (this.sunMarkerBtn && this.sunMarkerBtn.style.display !== 'none') {
         this.sunMarkerBtn.style.display = 'none';
       }
       this.hidePickMenu();

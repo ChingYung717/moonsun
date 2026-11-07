@@ -563,7 +563,10 @@ export class GroundView {
 
   public setHudVisible(visible: boolean): void {
     if (this.hudOverlayEl) {
-      this.hudOverlayEl.style.display = visible ? 'block' : 'none';
+      const next = visible ? 'block' : 'none';
+      if (this.hudOverlayEl.style.display !== next) {
+        this.hudOverlayEl.style.display = next;
+      }
     }
   }
 
@@ -572,10 +575,10 @@ export class GroundView {
     if (!this.hudOverlayEl || !this.sunLabelEl || !this.moonLabelEl) return;
 
     if (s.viewMode !== 'ground' || s.uiHidden) {
-      this.hudOverlayEl.style.display = 'none';
+      this.setHudVisible(false);
       return;
     }
-    this.hudOverlayEl.style.display = 'block';
+    this.setHudVisible(true);
 
     const w = window.innerWidth;
     const h = window.innerHeight;

@@ -277,6 +277,7 @@ export class LunarPanel {
 
   public refreshDisplay(frame: FrameAstroData): void {
     const s = this.state.get();
+    if (s.uiHidden) return;
     const info = computeLunarDetail(s.timeUtc);
     this.latestLunar = info;
 
