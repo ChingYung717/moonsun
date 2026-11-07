@@ -46,21 +46,24 @@ export function computeEclipseReplayMetrics(
 export function syncEclipseReplayState(state: AppState): void {
   const s = state.get();
   const rep = s.eclipseReplay;
-  if (!rep || !s.playing) return;
+  if (!rep || !rep.active || !s.playing) return;
 
   if (s.timeUtc >= rep.endUtcMs) {
     state.update({
       playing: false,
+      isRealtimeSync: false,
       eclipseReplay: { ...rep, active: false },
     });
     return;
   }
 
-  if (rep.active) {
-    const { desiredSpeed } = computeEclipseReplayMetrics(s.timeUtc, rep);
-    if (Math.abs(s.speedMultiplier - desiredSpeed) > 5) {
-      state.update({ speedMultiplier: desiredSpeed });
-    }
+  const { desiredSpeed } = computeEclipseReplayMetrics(s.timeUtc, rep);
+  const needSpeedUpdate = Math.abs(s.speedMultiplier - desiredSpeed) > 5;
+  if (needSpeedUpdate || s.isRealtimeSync) {
+    state.update({
+      ...(needSpeedUpdate ? { speedMultiplier: desiredSpeed } : {}),
+      ...(s.isRealtimeSync ? { isRealtimeSync: false } : {}),
+    });
   }
 }
 
@@ -81,22 +84,25 @@ export class SimulationClock {
     const dtSec = Number.isFinite(rawDtSec) && rawDtSec > 0 ? Math.min(rawDtSec, 0.25) : 0;
     this.lastPerfNow = nowPerf;
 
+    if (!this.state.get().playing) return;
+
+    if (this.state.get().eclipseReplay?.active) {
+      syncEclipseReplayState(this.state);
+    }
+
     const s = this.state.get();
     if (!s.playing) return;
 
-    if (s.eclipseReplay && s.timeUtc >= s.eclipseReplay.endUtcMs) {
-      syncEclipseReplayState(this.state);
-      return;
-    }
-
-    if (s.isRealtimeSync && s.speedMultiplier === 1) {
+    if (s.isRealtimeSync && s.speedMultiplier === 1 && !s.eclipseReplay?.active) {
       this.state.setTimeUtc(Date.now(), false);
     } else if (Number.isFinite(s.speedMultiplier)) {
       const nextUtc = s.timeUtc + dtSec * 1000 * s.speedMultiplier;
       this.state.setTimeUtc(nextUtc, false);
     }
 
-    syncEclipseReplayState(this.state);
+    if (this.state.get().eclipseReplay?.active) {
+      syncEclipseReplayState(this.state);
+    }
   }
 
   stepByMs(deltaMs: number): void {

@@ -107,9 +107,10 @@ export class EclipsePanel {
         this.renderFloatingCard(this.selectedEvent);
       }
       if (
-        changed.has('eclipseReplay') ||
-        (changed.has('uiHidden') && !s.uiHidden) ||
-        (s.eclipseReplay && (changed.has('speedMultiplier') || changed.has('playing')))
+        !s.uiHidden &&
+        (changed.has('uiHidden') ||
+          changed.has('eclipseReplay') ||
+          (s.eclipseReplay && (changed.has('speedMultiplier') || changed.has('playing'))))
       ) {
         this.refreshReplayProgress();
       }
@@ -896,36 +897,46 @@ export class EclipsePanel {
         }
       }
 
-      const totalSpanSec = Math.max(600, (u4 - u1) / 1000);
-      const baseSpeed = Math.round(totalSpanSec / 55);
+      const replayState = {
+        active: true,
+        startUtcMs: u1,
+        peakUtcMs: peak,
+        endUtcMs: u4,
+        u2UtcMs: u2,
+        u3UtcMs: u3,
+      };
+      const initialMetrics = computeEclipseReplayMetrics(u1, replayState);
 
       this.state.update({
         timeUtc: u1,
-        speedMultiplier: baseSpeed,
+        speedMultiplier: initialMetrics.desiredSpeed,
         playing: true,
         isRealtimeSync: false,
-        eclipseReplay: {
-          active: true,
-          startUtcMs: u1,
-          peakUtcMs: peak,
-          endUtcMs: u4,
-          u2UtcMs: u2,
-          u3UtcMs: u3,
-        },
+        eclipseReplay: replayState,
       });
       syncEclipseReplayState(this.state);
 
-      const progWrap = this.floatingCardEl.querySelector<HTMLElement>('#replay-progress-wrap');
-      if (progWrap) progWrap.style.display = 'block';
+      if (!this.state.get().uiHidden) {
+        const progWrap = this.floatingCardEl.querySelector<HTMLElement>('#replay-progress-wrap');
+        if (progWrap) progWrap.style.display = 'block';
+      }
     });
 
     const scrubber = this.floatingCardEl.querySelector<HTMLInputElement>('#replay-scrubber');
     scrubber?.addEventListener('input', () => {
       const rep = this.state.get().eclipseReplay;
       if (!rep) return;
-      const frac = parseFloat(scrubber.value) / 1000;
+      const frac = Math.max(0, Math.min(1, parseFloat(scrubber.value) / 1000));
       const targetUtc = rep.startUtcMs + (rep.endUtcMs - rep.startUtcMs) * frac;
+      const shouldBeActive = targetUtc < rep.endUtcMs;
+      const updatedRep = rep.active === shouldBeActive ? rep : { ...rep, active: shouldBeActive };
+      const metrics = computeEclipseReplayMetrics(targetUtc, updatedRep);
       this.state.setTimeUtc(targetUtc, true, true);
+      this.state.update({
+        eclipseReplay: updatedRep,
+        speedMultiplier: metrics.desiredSpeed,
+        ...(shouldBeActive ? {} : { playing: false }),
+      });
       this.refreshReplayProgress();
     });
 
@@ -940,8 +951,8 @@ export class EclipsePanel {
    * SimulationClock / syncEclipseReplayState so hiding UI never blocks replay control.
    */
   public refreshReplayProgress(): void {
-    if (!this.isFloatingCardOpen) return;
     const s = this.state.get();
+    if (!this.isFloatingCardOpen || s.uiHidden) return;
     const rep = s.eclipseReplay;
     const progWrap = this.floatingCardEl.querySelector<HTMLElement>('#replay-progress-wrap');
     const scrubber = this.floatingCardEl.querySelector<HTMLInputElement>('#replay-scrubber');

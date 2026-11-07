@@ -32,7 +32,9 @@ export class TimelineBar {
     this.el.id = 'tour-timeline';
     this.render();
     this.state.subscribe((s, changed) => {
+      if (s.uiHidden) return;
       if (
+        changed.has('uiHidden') ||
         changed.has('earthObserver') ||
         (changed.has('timeUtc') && (!s.playing || Math.abs(s.timeUtc - this.lastRenderedUtc) > 60000))
       ) {

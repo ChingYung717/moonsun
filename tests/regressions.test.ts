@@ -847,10 +847,38 @@ describe('Round-1 regressions', () => {
         '✅ 已复圆结束'
       );
 
-      return { fastSpeed, slowSpeed, endedPlaying: st.get().playing, endedActive: st.get().eclipseReplay?.active };
+      // Resuming playback (e.g. pressing Space) after replay completion advances timeUtc normally without re-stopping
+      const endedUtc = st.get().timeUtc;
+      st.update({ playing: true, isRealtimeSync: false });
+      runner.runFrame(1300);
+      expect(st.get().playing).toBe(true);
+      expect(st.get().timeUtc).toBeGreaterThan(endedUtc);
+
+      return { fastSpeed, slowSpeed, endedPlaying: false, endedActive: st.get().eclipseReplay?.active };
     };
 
     expect(runWithUiFlag(true)).toEqual(runWithUiFlag(false));
+
+    // Injecting an active replay while isRealtimeSync=true and speedMultiplier=1 exits realtime sync and applies replay speed on first tick
+    const stInjected = new AppState({
+      timeUtc: startUtc,
+      playing: true,
+      isRealtimeSync: true,
+      speedMultiplier: 1,
+      uiHidden: true,
+      eclipseReplay: {
+        active: true,
+        startUtcMs: startUtc,
+        peakUtcMs: peakUtc,
+        endUtcMs: endUtc,
+      },
+    });
+    const clockInjected = new SimulationClock(stInjected);
+    clockInjected.tick(2000);
+    expect(stInjected.get().isRealtimeSync).toBe(false);
+    expect(stInjected.get().speedMultiplier).toBe(195);
+    expect(stInjected.get().timeUtc).toBeGreaterThanOrEqual(startUtc);
+    expect(stInjected.get().timeUtc).toBeLessThan(endUtc);
   });
 });
 

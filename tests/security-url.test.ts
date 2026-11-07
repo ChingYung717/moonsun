@@ -423,6 +423,7 @@ describe('Security & URL State Serialization Regressions (B3 / MS-03 / MS-04 / M
 
       // 2b. F1 Regression: Compare replay variable-speed transitions and auto-stop when UI is visible vs hidden
       const runReplaySimulation = (uiHidden: boolean) => {
+        state.update({ uiHidden: false });
         panel.selectEclipseEvent(e2024, 'ground');
         const btn = (panel.floatingCardEl as unknown as MockEl).querySelector('#act-replay-ecl');
         btn.trigger('click');
@@ -436,6 +437,7 @@ describe('Security & URL State Serialization Regressions (B3 / MS-03 / MS-04 / M
         const clock = new SimulationClock(state);
         let lastUiRefresh = -Infinity;
         let domRefreshCalls = 0;
+        const refreshSpy = vi.spyOn(panel, 'refreshReplayProgress');
         const runner = new FrameRunner(state, clock, (now) => {
           const shouldRefreshUi = !state.get().uiHidden && now - lastUiRefresh > 80;
           if (shouldRefreshUi) {
@@ -445,50 +447,55 @@ describe('Security & URL State Serialization Regressions (B3 / MS-03 / MS-04 / M
           }
         });
 
-        let nowPerf = 10_000;
-        runner.runFrame(nowPerf); // baseline frame
-        const initialFastSpeed = state.get().speedMultiplier;
-        expect(initialFastSpeed).toBeGreaterThan(100);
+        try {
+          let nowPerf = 10_000;
+          runner.runFrame(nowPerf); // baseline frame
+          const initialFastSpeed = state.get().speedMultiplier;
+          expect(initialFastSpeed).toBeGreaterThan(100);
 
-        // Step into totality slow-motion window [u2 - 90s, u3 + 90s]
-        state.setTimeUtc(rep0.u2UtcMs! - 30_000, false, true);
-        nowPerf += 50;
-        runner.runFrame(nowPerf);
-        const totalitySlowSpeed = state.get().speedMultiplier;
-        expect(totalitySlowSpeed).toBeLessThan(initialFastSpeed * 0.5);
+          // Step into totality slow-motion window [u2 - 90s, u3 + 90s]
+          state.setTimeUtc(rep0.u2UtcMs! - 30_000, false, true);
+          nowPerf += 50;
+          runner.runFrame(nowPerf);
+          const totalitySlowSpeed = state.get().speedMultiplier;
+          expect(totalitySlowSpeed).toBeLessThan(initialFastSpeed * 0.5);
 
-        // Step out of totality window into post-U3 partial phase
-        state.setTimeUtc(rep0.u3UtcMs! + 120_000, false, true);
-        nowPerf += 50;
-        runner.runFrame(nowPerf);
-        const resumedFastSpeed = state.get().speedMultiplier;
-        expect(resumedFastSpeed).toBe(initialFastSpeed);
+          // Step out of totality window into post-U3 partial phase
+          state.setTimeUtc(rep0.u3UtcMs! + 120_000, false, true);
+          nowPerf += 50;
+          runner.runFrame(nowPerf);
+          const resumedFastSpeed = state.get().speedMultiplier;
+          expect(resumedFastSpeed).toBe(initialFastSpeed);
 
-        // Step just before endUtcMs and let frame advance across endUtcMs
-        state.setTimeUtc(rep0.endUtcMs - 500, false, true);
-        nowPerf += 100;
-        runner.runFrame(nowPerf);
+          // Step just before endUtcMs and let frame advance across endUtcMs
+          state.setTimeUtc(rep0.endUtcMs - 500, false, true);
+          nowPerf += 100;
+          runner.runFrame(nowPerf);
 
-        // Must stop immediately even while uiHidden === true
-        const finalState = state.get();
-        expect(finalState.timeUtc).toBeGreaterThanOrEqual(rep0.endUtcMs);
-        expect(finalState.playing).toBe(false);
-        expect(finalState.eclipseReplay?.active).toBe(false);
+          // Must stop immediately even while uiHidden === true
+          const finalState = state.get();
+          expect(finalState.timeUtc).toBeGreaterThanOrEqual(rep0.endUtcMs);
+          expect(finalState.playing).toBe(false);
+          expect(finalState.eclipseReplay?.active).toBe(false);
 
-        // Subsequent frames must not advance timeUtc further
-        const stoppedUtc = finalState.timeUtc;
-        nowPerf += 100;
-        runner.runFrame(nowPerf);
-        expect(state.get().timeUtc).toBe(stoppedUtc);
+          // Subsequent frames must not advance timeUtc further
+          const stoppedUtc = finalState.timeUtc;
+          nowPerf += 100;
+          runner.runFrame(nowPerf);
+          expect(state.get().timeUtc).toBe(stoppedUtc);
 
-        return {
-          initialFastSpeed,
-          totalitySlowSpeed,
-          resumedFastSpeed,
-          playing: finalState.playing,
-          active: finalState.eclipseReplay?.active,
-          domRefreshCalls,
-        };
+          return {
+            initialFastSpeed,
+            totalitySlowSpeed,
+            resumedFastSpeed,
+            playing: finalState.playing,
+            active: finalState.eclipseReplay?.active,
+            domRefreshCalls,
+            spyCalls: refreshSpy.mock.calls.length,
+          };
+        } finally {
+          refreshSpy.mockRestore();
+        }
       };
 
       const visibleRun = runReplaySimulation(false);
@@ -500,17 +507,30 @@ describe('Security & URL State Serialization Regressions (B3 / MS-03 / MS-04 / M
       expect(hiddenRun.playing).toBe(false);
       expect(hiddenRun.active).toBe(false);
       expect(hiddenRun.domRefreshCalls).toBe(0);
+      // Neither FrameRunner nor EclipsePanel state subscriber calls refreshReplayProgress while uiHidden=true
+      expect(hiddenRun.spyCalls).toBe(0);
 
-      // Unhiding UI after hidden replay completion shows completed badge and 100% scrubber
-      state.update({ uiHidden: false });
       const badge = (panel.floatingCardEl as unknown as MockEl).querySelector(
         '#replay-phase-badge'
       );
       const scrubber = (panel.floatingCardEl as unknown as MockEl).querySelector(
         '#replay-scrubber'
       );
+      // Before unhiding, DOM still reflects the initial state before uiHidden became true
+      expect(badge.textContent).toContain('⏩ 偏食阶段快进');
+      expect(scrubber.value).toBe('0');
+
+      // Unhiding UI after hidden replay completion immediately syncs completed badge and 100% scrubber
+      state.update({ uiHidden: false });
       expect(badge.textContent).toBe('✅ 已复圆结束');
       expect(scrubber.value).toBe('1000');
+
+      // Dragging scrubber back to 50% (totality) after completion reactivates replay and updates badge & speed
+      scrubber.value = '500';
+      scrubber.trigger('input');
+      expect(state.get().eclipseReplay?.active).toBe(true);
+      expect(state.get().speedMultiplier).toBe(hiddenRun.totalitySlowSpeed);
+      expect(badge.textContent).toContain('🔥 食既~生光自动慢放');
 
       // 3. SpaceView setHudVisible(false) explicitly hides space markers and removes pick menu
       let pickMenuRemoved = false;

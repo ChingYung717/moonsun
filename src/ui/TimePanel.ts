@@ -28,12 +28,14 @@ export class TimePanel {
     this.el = document.createElement('section');
     this.el.className = 'side-panel glass-panel';
     this.render();
-    this.state.subscribe((_, changed) => {
+    this.state.subscribe((s, changed) => {
+      if (s.uiHidden) return;
       if (
+        changed.has('uiHidden') ||
         changed.has('earthObserver') ||
         changed.has('playing') ||
         changed.has('speedMultiplier') ||
-        (changed.has('timeUtc') && !this.state.get().playing)
+        (changed.has('timeUtc') && !s.playing)
       ) {
         this.refreshDisplay();
       }
