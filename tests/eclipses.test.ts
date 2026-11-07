@@ -97,4 +97,25 @@ describe('Solar & Lunar Eclipses + Curated Catalog', () => {
       }
     }
   });
+
+  it('computes real greatest-eclipse coordinates and obscuration for partial solar eclipses (e.g. 2025-03-29)', () => {
+    const items2025 = searchEclipsesInYear(2025);
+    const mar29 = items2025.find((x) => x.id === 'solar-2025-03-29');
+    expect(mar29).toBeDefined();
+    expect(mar29!.category).toBe('solar-partial');
+    // Must not fall back to fake (0°, 0°) or 50% obscuration
+    expect(mar29!.peakLat).toBeGreaterThan(55);
+    expect(mar29!.peakLon).toBeLessThan(-60);
+    expect(mar29!.regionZh).toBe('北美洲');
+    expect(mar29!.obscuration).toBeGreaterThan(0.9);
+    expect(mar29!.introZh).not.toContain('非洲大陆');
+
+    // Verify local solar eclipse at the resolved peak coordinates actually observes >90% eclipse above horizon
+    const loc = Astronomy.SearchLocalSolarEclipse(
+      makeAstroTime(mar29!.peakUtcMs - 24 * 3600 * 1000),
+      new Astronomy.Observer(mar29!.peakLat, mar29!.peakLon, 0)
+    );
+    expect(loc.obscuration).toBeCloseTo(mar29!.obscuration, 2);
+    expect(loc.peak.altitude).toBeGreaterThan(0);
+  });
 });

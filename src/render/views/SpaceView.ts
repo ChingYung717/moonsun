@@ -77,6 +77,31 @@ export class SpaceView {
 
     this.setupPicking(canvas);
     this.setupScreenMarkers();
+
+    this.state.subscribe((s, changed) => {
+      if (
+        (changed.has('viewMode') && s.viewMode !== 'space') ||
+        (changed.has('scaleMode') && s.scaleMode !== 'realistic') ||
+        (changed.has('uiHidden') && s.uiHidden)
+      ) {
+        this.setHudVisible(false);
+      }
+    });
+  }
+
+  public setHudVisible(visible: boolean): void {
+    if (!visible) {
+      if (this.markerLayerEl) {
+        this.markerLayerEl.style.display = 'none';
+      }
+      if (this.moonMarkerBtn) {
+        this.moonMarkerBtn.style.display = 'none';
+      }
+      if (this.sunMarkerBtn) {
+        this.sunMarkerBtn.style.display = 'none';
+      }
+      this.hidePickMenu();
+    }
   }
 
   private setupScreenMarkers(): void {
@@ -310,8 +335,7 @@ export class SpaceView {
     if (!this.markerLayerEl || !this.moonMarkerBtn || !this.sunMarkerBtn) return;
 
     if (s.viewMode !== 'space' || s.uiHidden) {
-      this.markerLayerEl.style.display = 'none';
-      this.hidePickMenu();
+      this.setHudVisible(false);
       return;
     }
     this.markerLayerEl.style.display = 'block';

@@ -1,5 +1,7 @@
 import * as Astronomy from 'astronomy-engine';
-import { makeAstroTime } from '../ephemeris';
+import { computeEphemeris, makeAstroTime } from '../ephemeris';
+import { computeEarthOrientation } from '../earthOrientation';
+import { ecefToLatLon } from '../frames';
 import { formatAstroDateUtc, formatDateTime, historicalDateLabelZh } from '../../time/tz';
 import {
   CHINA_LUNAR_GRID_POINTS,
@@ -333,6 +335,79 @@ export function computeEclipseScore(
 }
 
 /**
+ * For partial solar eclipses where the lunar shadow axis misses Earth's surface,
+ * `Astronomy.SearchGlobalSolarEclipse` leaves `latitude`, `longitude`, and `obscuration` undefined.
+ * Compute the genuine greatest-eclipse point on Earth's sunlit limb (closest to the shadow axis)
+ * and evaluate the actual maximum obscuration via `Astronomy.SearchLocalSolarEclipse`.
+ */
+export function resolvePartialSolarEclipsePeak(peakUtcMs: number): {
+  lat: number;
+  lon: number;
+  obscuration: number;
+} {
+  const eph = computeEphemeris(peakUtcMs);
+  const ori = computeEarthOrientation(peakUtcMs);
+  const m = ori.eclToEcef(eph.moonEclKm);
+  const s = ori.eclToEcef(eph.sunEclKm);
+
+  const dx = m.x - s.x;
+  const dy = m.y - s.y;
+  const dz = m.z - s.z;
+  const dLen = Math.hypot(dx, dy, dz) || 1;
+  const ux = dx / dLen;
+  const uy = dy / dLen;
+  const uz = dz / dLen;
+
+  // Closest point on the Sun->Moon shadow axis to Earth's center (origin)
+  const proj = -(m.x * ux + m.y * uy + m.z * uz);
+  const cx = m.x + proj * ux;
+  const cy = m.y + proj * uy;
+  const cz = m.z + proj * uz;
+  const cLen = Math.hypot(cx, cy, cz) || 1;
+  const nx = cx / cLen;
+  const ny = cy / cLen;
+  const nz = cz / cLen;
+
+  const sLen = Math.hypot(s.x, s.y, s.z) || 1;
+  const sx = s.x / sLen;
+  const sy = s.y / sLen;
+  const sz = s.z / sLen;
+
+  const tStart = makeAstroTime(peakUtcMs - 36 * 3600 * 1000);
+  // Nudge slightly sunward from the geometric terminator so the Sun is above the horizon (>1 deg)
+  for (const sunBias of [0.02, 0.0, 0.05, 0.09]) {
+    const vx = nx + sx * sunBias;
+    const vy = ny + sy * sunBias;
+    const vz = nz + sz * sunBias;
+    const { lat, lon } = ecefToLatLon({ x: vx, y: vy, z: vz });
+    try {
+      const loc = Astronomy.SearchLocalSolarEclipse(tStart, new Astronomy.Observer(lat, lon, 0));
+      if (
+        loc &&
+        Math.abs(loc.peak.time.date.getTime() - peakUtcMs) < 24 * 3600 * 1000 &&
+        loc.obscuration > 0 &&
+        loc.peak.altitude >= 0
+      ) {
+        return {
+          lat: Math.round(lat * 100) / 100,
+          lon: Math.round(lon * 100) / 100,
+          obscuration: loc.obscuration,
+        };
+      }
+    } catch {
+      // try next bias
+    }
+  }
+
+  const fallback = ecefToLatLon({ x: nx + sx * 0.03, y: ny + sy * 0.03, z: nz + sz * 0.03 });
+  return {
+    lat: Math.round(fallback.lat * 100) / 100,
+    lon: Math.round(fallback.lon * 100) / 100,
+    obscuration: 0,
+  };
+}
+
+/**
  * Build an EclipseEventItem from an Astronomy.GlobalSolarEclipseInfo.
  */
 export function buildSolarEclipseItem(e: Astronomy.GlobalSolarEclipseInfo): EclipseEventItem {
@@ -340,14 +415,22 @@ export function buildSolarEclipseItem(e: Astronomy.GlobalSolarEclipseInfo): Ecli
   const year = e.peak.date.getUTCFullYear();
   const dateStrUtc = formatAstroDateUtc(peakUtcMs);
   const dateStrBeijing = formatDateTime(peakUtcMs, 'Asia/Shanghai', false);
+  const needsPartialPeak =
+    e.latitude === undefined ||
+    !Number.isFinite(e.latitude) ||
+    e.longitude === undefined ||
+    !Number.isFinite(e.longitude) ||
+    e.obscuration === undefined ||
+    !Number.isFinite(e.obscuration);
+  const resolvedPartial = needsPartialPeak ? resolvePartialSolarEclipsePeak(peakUtcMs) : null;
   const peakLat: number =
-    e.latitude !== undefined && Number.isFinite(e.latitude) ? e.latitude : 0;
+    e.latitude !== undefined && Number.isFinite(e.latitude) ? e.latitude : resolvedPartial!.lat;
   const peakLon: number =
-    e.longitude !== undefined && Number.isFinite(e.longitude) ? e.longitude : 0;
+    e.longitude !== undefined && Number.isFinite(e.longitude) ? e.longitude : resolvedPartial!.lon;
   const obscuration: number =
     e.obscuration !== undefined && Number.isFinite(e.obscuration)
       ? e.obscuration
-      : 0.5;
+      : resolvedPartial!.obscuration;
 
   let category: EclipseCategory = 'solar-partial';
   let typeLabelZh = '日偏食';

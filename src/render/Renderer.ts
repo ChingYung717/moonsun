@@ -109,11 +109,13 @@ export class MasterRenderer {
       this.renderer.render(this.spaceView.scene, this.spaceView.camera);
     } else if (s.viewMode === 'ground') {
       this.spaceView.controls.enabled = false;
+      this.spaceView.setHudVisible(false);
       this.moonSurfaceView.setHudVisible(false);
       this.groundView.update(eph, earthSky, phase.illuminatedFraction, earthOri, moonOri);
       this.renderer.render(this.groundView.scene, this.groundView.camera);
     } else {
       this.spaceView.controls.enabled = false;
+      this.spaceView.setHudVisible(false);
       this.groundView.setHudVisible(false);
       this.moonSurfaceView.update(eph, moonSky, earthOri, moonOri);
       this.renderer.render(

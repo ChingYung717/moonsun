@@ -12,7 +12,7 @@ import {
   searchUpcomingLocalSolarEclipses,
 } from '../astro/eclipses/search';
 import { makeAstroTime } from '../astro/ephemeris';
-import { formatDateTime, formatTimeShort } from '../time/tz';
+import { formatDateTime, formatTimeShort, inferTimezone, utcToLocalParts } from '../time/tz';
 import { MasterRenderer } from '../render/Renderer';
 import { showToast } from './Toast';
 import { termTipHtml } from './tooltips';
@@ -24,6 +24,13 @@ interface EclipseContactPoint {
   isKey?: boolean;
 }
 
+interface EclipseContactSite {
+  name: string;
+  lat: number;
+  lon: number;
+  isFallbackSite: boolean;
+}
+
 export class EclipsePanel {
   public readonly el: HTMLElement;
   public readonly floatingCardEl: HTMLElement;
@@ -31,6 +38,7 @@ export class EclipsePanel {
   private selectedEvent: EclipseEventItem | null = null;
   private isFloatingCardOpen = false;
   private currentContacts: EclipseContactPoint[] = [];
+  private currentContactSite: EclipseContactSite | null = null;
   private onEventSelectedCallback: (() => void) | null = null;
 
   public onEventSelected(cb: () => void): void {
@@ -49,16 +57,62 @@ export class EclipsePanel {
     this.floatingCardEl.style.display = 'none';
 
     this.render();
-    this.state.subscribe((_, changed) => {
+    this.state.subscribe((s, changed) => {
       if (changed.has('uiMode')) {
         this.renderCuratedList();
       }
-      if (changed.has('earthObserver') && this.selectedEvent && this.isFloatingCardOpen) {
+      let cardRenderedForSelection = false;
+      if (changed.has('selectedEclipseId')) {
+        if (!s.selectedEclipseId) {
+          this.selectedEvent = null;
+          this.currentContacts = [];
+          this.currentContactSite = null;
+          this.isFloatingCardOpen = false;
+          this.floatingCardEl.style.display = 'none';
+        } else if (this.selectedEvent?.id !== s.selectedEclipseId) {
+          const resolved = this.resolveEventById(s.selectedEclipseId);
+          if (resolved) {
+            this.selectedEvent = resolved;
+            this.isFloatingCardOpen = true;
+            this.renderFloatingCard(resolved);
+            cardRenderedForSelection = true;
+          }
+        }
+        this.syncSelectedHighlightInLists();
+      }
+      if (
+        !cardRenderedForSelection &&
+        changed.has('earthObserver') &&
+        this.selectedEvent &&
+        this.isFloatingCardOpen
+      ) {
         this.renderFloatingCard(this.selectedEvent);
       }
       if (changed.has('eclipseReplay')) {
         this.refreshReplayProgress();
       }
+    });
+  }
+
+  private resolveEventById(id: string | null): EclipseEventItem | null {
+    if (!id) return null;
+    let item = CURATED_ECLIPSE_CATALOG.find((x) => x.id === id);
+    if (!item) {
+      const m = id.match(/^(?:solar|lunar)-(-?\d{1,4})-\d{2}-\d{2}$/);
+      if (m) {
+        const y = parseInt(m[1], 10);
+        if (y >= -1999 && y <= 3000) {
+          item = searchEclipsesInYear(y).find((x) => x.id === id);
+        }
+      }
+    }
+    return item ?? null;
+  }
+
+  private syncSelectedHighlightInLists(): void {
+    const activeId = this.selectedEvent?.id ?? null;
+    this.el.querySelectorAll<HTMLElement>('.eclipse-item[data-id]').forEach((row) => {
+      row.classList.toggle('selected', row.dataset.id === activeId);
     });
   }
 
@@ -310,18 +364,30 @@ export class EclipsePanel {
   private computeContacts(item: EclipseEventItem): {
     contacts: EclipseContactPoint[];
     siteLabel: string;
+    timezone: string;
+    contactSite: EclipseContactSite | null;
   } {
     const s = this.state.get();
     const contacts: EclipseContactPoint[] = [];
 
     if (item.kind === 'solar') {
       // Try current observer first; if no local eclipse, fall back to item's featured site
+      const fallbackName =
+        item.featuredSiteName ?? `${describeRegionZh(item.peakLat, item.peakLon)}极盛点`;
       const tryCoords = [
-        { lat: s.earthObserver.lat, lon: s.earthObserver.lon, name: s.earthObserver.name },
+        {
+          lat: s.earthObserver.lat,
+          lon: s.earthObserver.lon,
+          name: s.earthObserver.name,
+          timezone: s.earthObserver.timezone,
+          isFallbackSite: false,
+        },
         {
           lat: item.peakLat,
           lon: item.peakLon,
-          name: item.featuredSiteName ?? `${describeRegionZh(item.peakLat, item.peakLon)}极盛点`,
+          name: fallbackName,
+          timezone: inferTimezone(item.peakLat, item.peakLon),
+          isFallbackSite: true,
         },
       ];
       for (const c of tryCoords) {
@@ -367,7 +433,17 @@ export class EclipsePanel {
               labelZh: '复圆',
               utcMs: loc.partial_end.time.date.getTime(),
             });
-            return { contacts, siteLabel: c.name };
+            return {
+              contacts,
+              siteLabel: c.name,
+              timezone: c.timezone,
+              contactSite: {
+                name: c.name,
+                lat: c.lat,
+                lon: c.lon,
+                isFallbackSite: c.isFallbackSite,
+              },
+            };
           }
         } catch {
           // continue
@@ -379,7 +455,17 @@ export class EclipsePanel {
         { code: 'Max', labelZh: '食甚', utcMs: item.peakUtcMs, isKey: true },
         { code: 'U4', labelZh: '复圆', utcMs: item.peakUtcMs + 70 * 60 * 1000 }
       );
-      return { contacts, siteLabel: '全球极盛点' };
+      return {
+        contacts,
+        siteLabel: '全球极盛点',
+        timezone: inferTimezone(item.peakLat, item.peakLon),
+        contactSite: {
+          name: fallbackName,
+          lat: item.peakLat,
+          lon: item.peakLon,
+          isFallbackSite: true,
+        },
+      };
     } else {
       // Lunar eclipse global contacts
       try {
@@ -438,7 +524,12 @@ export class EclipsePanel {
               utcMs: p + le.sd_penum * 60 * 1000,
             });
           }
-          return { contacts, siteLabel: '全球统一接触时刻' };
+          return {
+            contacts,
+            siteLabel: '全球统一接触时刻',
+            timezone: s.earthObserver.timezone,
+            contactSite: null,
+          };
         }
       } catch {
         // ignore
@@ -448,7 +539,12 @@ export class EclipsePanel {
         { code: 'Max', labelZh: '食甚', utcMs: item.peakUtcMs, isKey: true },
         { code: 'U4', labelZh: '复圆', utcMs: item.peakUtcMs + 95 * 60 * 1000 }
       );
-      return { contacts, siteLabel: '全球接触时刻' };
+      return {
+        contacts,
+        siteLabel: '全球接触时刻',
+        timezone: s.earthObserver.timezone,
+        contactSite: null,
+      };
     }
   }
 
@@ -516,7 +612,6 @@ export class EclipsePanel {
       actionLabel: '↩ 返回上一状态',
       onAction: () => {
         this.state.undoLastJump();
-        this.closeFloatingCard();
       },
     });
   }
@@ -603,19 +698,19 @@ export class EclipsePanel {
 
   private renderFloatingCard(item: EclipseEventItem): void {
     this.floatingCardEl.style.display = 'block';
-    const s = this.state.get();
-    const tz = s.earthObserver.timezone;
     const latStr =
       item.peakLat >= 0 ? `${item.peakLat.toFixed(2)}°N` : `${(-item.peakLat).toFixed(2)}°S`;
     const lonStr =
       item.peakLon >= 0 ? `${item.peakLon.toFixed(2)}°E` : `${(-item.peakLon).toFixed(2)}°W`;
 
-    const { contacts, siteLabel } = this.computeContacts(item);
+    const { contacts, siteLabel, timezone: contactTz, contactSite } = this.computeContacts(item);
     this.currentContacts = contacts;
+    this.currentContactSite = contactSite;
+    const tzLabel = utcToLocalParts(item.peakUtcMs, contactTz).offsetLabel;
 
     const contactsHtml = contacts
       .map((c, idx) => {
-        const tStr = formatTimeShort(c.utcMs, tz);
+        const tStr = formatTimeShort(c.utcMs, contactTz);
         return `
           <button type="button" class="ms-contact-pill ${c.isKey ? 'is-key' : ''}" data-cidx="${idx}" title="点击跳转到 ${c.labelZh} (${tStr})">
             <span class="c-name">${c.labelZh} (${c.code})</span>
@@ -642,7 +737,7 @@ export class EclipsePanel {
 
       <div class="ms-contacts-section">
         <div class="ms-contacts-head">
-          <span>⏱ 接触时刻（${escapeHtml(siteLabel)} · 当地时间，点击直接跳转）：</span>
+          <span>⏱ 接触时刻（${escapeHtml(siteLabel)} · 当地时间 ${tzLabel}，点击直接跳转）：</span>
           <span id="replay-phase-badge" class="replay-phase-badge"></span>
         </div>
         <div class="ms-contacts-bar">${contactsHtml}</div>
@@ -676,6 +771,16 @@ export class EclipsePanel {
         const idx = parseInt(btn.dataset.cidx!, 10);
         const pt = this.currentContacts[idx];
         if (pt) {
+          if (this.currentContactSite?.isFallbackSite) {
+            this.state.setEarthLocation({
+              name: this.currentContactSite.name,
+              lat: this.currentContactSite.lat,
+              lon: this.currentContactSite.lon,
+            });
+            if (this.state.get().viewMode === 'ground') {
+              this.renderer.groundView.setLockTarget(item.kind === 'solar' ? 'sun' : 'moon');
+            }
+          }
           this.state.update({ playing: false, eclipseReplay: null });
           this.state.setTimeUtc(pt.utcMs, true);
         }
@@ -707,6 +812,17 @@ export class EclipsePanel {
       const u3 = this.currentContacts.find((c) => c.code === 'U3')?.utcMs ?? null;
       const peak =
         this.currentContacts.find((c) => c.code === 'Max')?.utcMs ?? item.peakUtcMs;
+
+      if (this.currentContactSite?.isFallbackSite) {
+        this.state.setEarthLocation({
+          name: this.currentContactSite.name,
+          lat: this.currentContactSite.lat,
+          lon: this.currentContactSite.lon,
+        });
+        if (this.state.get().viewMode === 'ground') {
+          this.renderer.groundView.setLockTarget(item.kind === 'solar' ? 'sun' : 'moon');
+        }
+      }
 
       const totalSpanSec = Math.max(600, (u4 - u1) / 1000);
       const baseSpeed = Math.round(totalSpanSec / 55);
