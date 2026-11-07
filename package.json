@@ -1,0 +1,37 @@
+{
+  "name": "moonsun-3d",
+  "private": true,
+  "version": "1.0.0",
+  "description": "日月地 3D 实时天文、日月食历算与传统农历系统 (Three.js + Astronomy Engine)",
+  "license": "MIT",
+  "author": "ChingYung717",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ChingYung717/moonsun.git"
+  },
+  "homepage": "https://chingyung717.github.io/moonsun/",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc --noEmit && vite build",
+    "preview": "vite preview",
+    "test": "vitest run",
+    "build:catalog": "tsx scripts/build-catalog.ts"
+  },
+  "dependencies": {
+    "astronomy-engine": "^2.1.19",
+    "lunar-javascript": "^1.7.7",
+    "luxon": "^3.5.0",
+    "three": "^0.170.0",
+    "tz-lookup": "^6.1.25"
+  },
+  "devDependencies": {
+    "@types/luxon": "^3.4.2",
+    "@types/node": "^22.0.0",
+    "@types/three": "^0.170.0",
+    "tsx": "^4.19.0",
+    "typescript": "^5.6.3",
+    "vite": "^6.0.0",
+    "vitest": "^2.1.5"
+  }
+}
