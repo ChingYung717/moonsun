@@ -22,8 +22,6 @@ const QUOTAS = {
   lunarTotal: 60,   // modern (1900..2095) lunar-total
 } as const;
 
-const SAROS_DAYS_MS = 6585.3213 * 86400 * 1000;
-
 interface NoteTarget {
   key: string;
   kind: 'solar' | 'lunar';

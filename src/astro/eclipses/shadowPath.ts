@@ -2,7 +2,6 @@ import {
   EARTH_RADIUS_EQ_KM,
   EARTH_RADIUS_POLAR_KM,
   MOON_RADIUS_KM,
-  RAD2DEG,
   SUN_RADIUS_KM,
 } from '../../utils/math';
 import { computeEarthOrientation } from '../earthOrientation';
@@ -296,7 +295,7 @@ export function computeSolarEclipsePath(peakUtcMs: number): SolarEclipseShadowPa
 function signedUmbraRadiusKm(
   distMoonToSurfaceKm: number,
   lUmbraKm: number,
-  dSunMoon: number
+  _dSunMoon: number
 ): number {
   if (distMoonToSurfaceKm <= lUmbraKm) {
     return MOON_RADIUS_KM * (1 - distMoonToSurfaceKm / lUmbraKm);

@@ -51,8 +51,9 @@ export function showToast(opts: ToastOptions | string): void {
   closeBtn.addEventListener('click', () => item.remove());
   item.appendChild(closeBtn);
 
-  // Keep at most 2 active toasts
-  while (container.children.length >= 2) {
+  // Keep at most 1 active toast on mobile (<=760px) and 2 on desktop
+  const maxActive = typeof window !== 'undefined' && window.innerWidth <= 760 ? 1 : 2;
+  while (container.children.length >= maxActive) {
     container.firstElementChild?.remove();
   }
   container.appendChild(item);

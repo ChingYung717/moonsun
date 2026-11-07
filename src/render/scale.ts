@@ -3,7 +3,6 @@ import {
   EARTH_RADIUS_EQ_KM,
   MOON_RADIUS_KM,
   SUN_RADIUS_KM,
-  astroToThreeVec,
   lerp,
 } from '../utils/math';
 import { ScaleMode } from '../state/AppState';

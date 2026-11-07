@@ -40,7 +40,7 @@ export class SpaceView {
   private sunMarkerBtn: HTMLButtonElement | null = null;
 
   constructor(
-    private canvas: HTMLCanvasElement,
+    canvas: HTMLCanvasElement,
     textures: PlanetaryTextures,
     private state: AppState
   ) {

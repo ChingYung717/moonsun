@@ -37,6 +37,15 @@ export function loadPlanetaryTextures(
     typeof window !== 'undefined' &&
     (window.innerWidth < 760 ||
       (typeof window.matchMedia === 'function' && window.matchMedia('(max-width: 760px)').matches));
+  const navConn = typeof navigator !== 'undefined' ? (navigator as any).connection : undefined;
+  const isConstrainedNetwork = Boolean(
+    navConn &&
+      (navConn.saveData === true ||
+        navConn.effectiveType === 'slow-2g' ||
+        navConn.effectiveType === '2g' ||
+        navConn.effectiveType === '3g')
+  );
+  const skip4kUpgrade = isSmallScreen || isConstrainedNetwork;
 
   let totalStages = 0;
   let completedStages = 0;
@@ -84,7 +93,7 @@ export function loadPlanetaryTextures(
         }
         reportProgress();
 
-        if (highUrl && !isSmallScreen) {
+        if (highUrl && !skip4kUpgrade) {
           loader.load(
             highUrl,
             (loaded4k) => {

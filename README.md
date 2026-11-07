@@ -54,7 +54,7 @@ npm install
 # 2. 启动本地开发服务器 (默认 http://localhost:5173)
 npm run dev
 
-# 3. 运行天体历算与回归单元测试 (Vitest)
+# 3. 运行天体历算、URL 安全与回归单元测试 (Vitest)
 npm test
 
 # 4. 运行 96 篇精选日月食专文程序化事实核查脚本
@@ -82,27 +82,34 @@ moonsun/
 ├── scripts/
 │   ├── build-catalog.ts         # 200 场精选日月食构建与配额排序脚本
 │   ├── fact-check-intros.ts     # 96 篇人工简介历算事实核查脚本
-│   └── fetch-textures.sh        # 行星贴图下载脚本
+│   └── fetch-textures.sh        # 行星贴图下载与 4K/2K 缩放脚本
 ├── src/
 │   ├── astro/                   # 天体力学核心 (星历、坐标系、地平转换、五大行星、日月食、农历)
 │   ├── render/                  # Three.js 渲染器、GLSL 着色器、真实星场与三大视角
 │   ├── state/                   # 全局响应式状态与撤销栈 (AppState.ts)
 │   ├── time/                    # 仿真时钟、时区、儒略历与 ΔT 工具
 │   └── ui/                      # 顶栏、可折叠侧栏、时间轴、浮动天象卡片、欢迎引导与帮助中心
-└── tests/                       # Vitest 历算精度与回归测试套件 (46 项断言)
+└── tests/                       # Vitest 历算精度、安全转义与回归测试套件
 ```
 
 ---
 
-## 数据与素材来源 (Credits)
+## 数据与素材来源 (Credits & Attribution)
 
-- **天体表面贴图**：来自 NASA Visible Earth (Blue Marble / Black Marble)、NASA Scientific Visualization Studio (CGI Moon Kit, LRO)（公有领域 Public Domain）与 Solar System Scope / ESO（CC BY 4.0），详见 [`public/textures/CREDITS.md`](./public/textures/CREDITS.md)。
-- **恒星表与星座连线** (`public/data/stars.6.json`, `constellations.lines.json`)：衍生自 [d3-celestial](https://github.com/ofrohn/d3-celestial)（BSD-3-Clause License, © Olaf Frohn）。
-- **中国疆域多边形** (`src/astro/geo/chinaBoundary.ts`)：衍生自 [Natural Earth](https://www.naturalearthdata.com/) 10m 数据（公有领域 Public Domain）。
-- **核心开源依赖**：[Three.js](https://threejs.org/) (MIT)、[Astronomy Engine](https://github.com/cosinekitty/astronomy) (MIT)、[lunar-javascript](https://github.com/6tail/lunar-javascript) (MIT)、[Luxon](https://moment.github.io/luxon/) (MIT)、[tz-lookup](https://github.com/darkskyapp/tz-lookup-oss) (CC0-1.0)。
+详细版权声明与许可证全文请参阅 [`THIRD_PARTY_NOTICES.md`](./THIRD_PARTY_NOTICES.md) 与 [`public/textures/CREDITS.md`](./public/textures/CREDITS.md)：
+
+1. **天体表面贴图 (`public/textures/*`)**：
+   - `earth_day_{2k,4k}.jpg`、`earth_night_{2k,4k}.jpg`、`earth_clouds_{2k,4k}.jpg`、`moon_{2k,4k}.jpg`、`stars_milkyway_{2k,4k}.jpg`、`sun.jpg`：源自 **[Solar System Scope (INOVE)](https://www.solarsystemscope.com/textures/)**（基于 NASA 高程与遥感影像加工），采用 **[CC BY 4.0](https://creativecommons.org/licenses/by/4.0/)** 许可；其中 `*_4k.jpg` 与 `*_2k.jpg` 由原始 8K 贴图按比例缩放至 4096×2048 与 2048×1024 并重新进行 JPEG 编码。
+   - `earth_normal.jpg`、`earth_specular.jpg`：源自 **[Three.js Examples (`mrdoob/three.js`)](https://github.com/mrdoob/three.js/tree/dev/examples/textures/planets)**（MIT License，原始数据来自 NASA Visible Earth 公有领域）。
+2. **恒星表与星座连线 (`public/data/stars.6.json`, `constellations.lines.json`)**：
+   - GeoJSON 转换与星座连线源自 Olaf Frohn 的 **[`d3-celestial`](https://github.com/ofrohn/d3-celestial)**（**BSD 3-Clause License**，Copyright © 2015–2016 Olaf Frohn）。
+   - `stars.6.json` 的上游恒星天体测量汇编数据源自 David Nash (**[Astronexus](https://www.astronexus.com/hyg)**) 的 **HYG Stellar Database**（汇编自 Hipparcos、Yale Bright Star Catalog 5th Ed. 与 Gliese 星表），采用 **[CC BY-SA 4.0](https://creativecommons.org/licenses/by-sa/4.0/) / [CC BY-SA 2.5](https://creativecommons.org/licenses/by-sa/2.5/)** 许可。
+3. **中国疆域多边形 (`src/astro/geo/chinaBoundary.ts`)**：衍生自 **[Natural Earth](https://www.naturalearthdata.com/)** `ne_10m_admin_0_countries_chn` 数据集（公有领域 Public Domain），仅用于日月食中国可见性球面几何计算。
+4. **核心开源依赖**：[Three.js](https://threejs.org/) (MIT)、[Astronomy Engine](https://github.com/cosinekitty/astronomy) (MIT)、[lunar-javascript](https://github.com/6tail/lunar-javascript) (MIT)、[Luxon](https://moment.github.io/luxon/) (MIT)、[tz-lookup](https://github.com/darkskyapp/tz-lookup-oss) (CC0-1.0)。
 
 ---
 
 ## 许可证 (License)
 
-本项目源代码基于 **[MIT License](./LICENSE)** 开源（Copyright © 2026 ChingYung717）。第三方天体贴图与科学数据集遵循其各自原始许可协议，详见 [`public/textures/CREDITS.md`](./public/textures/CREDITS.md)。
+- **源代码 (`src/`、`scripts/`、`tests/`)**：基于 **[MIT License](./LICENSE)** 开源（Copyright © 2026 ChingYung717）。
+- **第三方数据集与贴图 (`public/data/*`、`public/textures/*`)**：**不适用 MIT License**，分别遵循各自的原始许可协议（`d3-celestial` BSD-3-Clause、HYG Database CC BY-SA 4.0/2.5、Solar System Scope CC BY 4.0、NASA / Natural Earth Public Domain）。完整声明与许可证正文见 [`THIRD_PARTY_NOTICES.md`](./THIRD_PARTY_NOTICES.md)。
