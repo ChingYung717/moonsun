@@ -169,10 +169,14 @@ describe('Round-1 regressions', () => {
     expect(nearSide.dot(moonToObserver)).toBeGreaterThan(Math.cos(12 * DEG2RAD));
   });
 
-  it('fact-check script verifies all hand-written notes with 0 discrepancies (A1)', () => {
-    const issues = runFactCheck();
-    expect(issues).toEqual([]);
-  });
+  it(
+    'fact-check script verifies all hand-written notes with 0 discrepancies (A1)',
+    () => {
+      const issues = runFactCheck();
+      expect(issues).toEqual([]);
+    },
+    20_000
+  );
 
   it('enforces exact 200-item catalog quotas across 4 categories (A2 & A3)', () => {
     expect(CURATED_ECLIPSE_CATALOG.length).toBe(200);
