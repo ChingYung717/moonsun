@@ -17,6 +17,7 @@ import { EclipsePanel } from '../src/ui/EclipsePanel';
 import { InfoHUD } from '../src/ui/InfoHUD';
 import { LocationPanel } from '../src/ui/LocationPanel';
 import { SpaceView } from '../src/render/views/SpaceView';
+import { FrameRunner, SimulationClock } from '../src/time/Clock';
 
 describe('Security & URL State Serialization Regressions (B3 / MS-03 / MS-04 / MS-11)', () => {
   it('escapeHtml escapes all 5 HTML special characters and neutralizes XSS payloads', () => {
@@ -419,6 +420,97 @@ describe('Security & URL State Serialization Regressions (B3 / MS-03 / MS-04 / M
       expect(state.get().earthObserver.lat).toBeCloseTo(e2024.peakLat, 2);
       expect(state.get().earthObserver.lon).toBeCloseTo(e2024.peakLon, 2);
       expect(state.get().eclipseReplay?.active).toBe(true);
+
+      // 2b. F1 Regression: Compare replay variable-speed transitions and auto-stop when UI is visible vs hidden
+      const runReplaySimulation = (uiHidden: boolean) => {
+        panel.selectEclipseEvent(e2024, 'ground');
+        const btn = (panel.floatingCardEl as unknown as MockEl).querySelector('#act-replay-ecl');
+        btn.trigger('click');
+        state.update({ uiHidden });
+
+        const rep0 = state.get().eclipseReplay!;
+        expect(rep0.active).toBe(true);
+        expect(rep0.u2UtcMs).toBeTruthy();
+        expect(rep0.u3UtcMs).toBeTruthy();
+
+        const clock = new SimulationClock(state);
+        let lastUiRefresh = -Infinity;
+        let domRefreshCalls = 0;
+        const runner = new FrameRunner(state, clock, (now) => {
+          const shouldRefreshUi = !state.get().uiHidden && now - lastUiRefresh > 80;
+          if (shouldRefreshUi) {
+            panel.refreshReplayProgress();
+            lastUiRefresh = now;
+            domRefreshCalls++;
+          }
+        });
+
+        let nowPerf = 10_000;
+        runner.runFrame(nowPerf); // baseline frame
+        const initialFastSpeed = state.get().speedMultiplier;
+        expect(initialFastSpeed).toBeGreaterThan(100);
+
+        // Step into totality slow-motion window [u2 - 90s, u3 + 90s]
+        state.setTimeUtc(rep0.u2UtcMs! - 30_000, false, true);
+        nowPerf += 50;
+        runner.runFrame(nowPerf);
+        const totalitySlowSpeed = state.get().speedMultiplier;
+        expect(totalitySlowSpeed).toBeLessThan(initialFastSpeed * 0.5);
+
+        // Step out of totality window into post-U3 partial phase
+        state.setTimeUtc(rep0.u3UtcMs! + 120_000, false, true);
+        nowPerf += 50;
+        runner.runFrame(nowPerf);
+        const resumedFastSpeed = state.get().speedMultiplier;
+        expect(resumedFastSpeed).toBe(initialFastSpeed);
+
+        // Step just before endUtcMs and let frame advance across endUtcMs
+        state.setTimeUtc(rep0.endUtcMs - 500, false, true);
+        nowPerf += 100;
+        runner.runFrame(nowPerf);
+
+        // Must stop immediately even while uiHidden === true
+        const finalState = state.get();
+        expect(finalState.timeUtc).toBeGreaterThanOrEqual(rep0.endUtcMs);
+        expect(finalState.playing).toBe(false);
+        expect(finalState.eclipseReplay?.active).toBe(false);
+
+        // Subsequent frames must not advance timeUtc further
+        const stoppedUtc = finalState.timeUtc;
+        nowPerf += 100;
+        runner.runFrame(nowPerf);
+        expect(state.get().timeUtc).toBe(stoppedUtc);
+
+        return {
+          initialFastSpeed,
+          totalitySlowSpeed,
+          resumedFastSpeed,
+          playing: finalState.playing,
+          active: finalState.eclipseReplay?.active,
+          domRefreshCalls,
+        };
+      };
+
+      const visibleRun = runReplaySimulation(false);
+      const hiddenRun = runReplaySimulation(true);
+
+      expect(hiddenRun.initialFastSpeed).toBe(visibleRun.initialFastSpeed);
+      expect(hiddenRun.totalitySlowSpeed).toBe(visibleRun.totalitySlowSpeed);
+      expect(hiddenRun.resumedFastSpeed).toBe(visibleRun.resumedFastSpeed);
+      expect(hiddenRun.playing).toBe(false);
+      expect(hiddenRun.active).toBe(false);
+      expect(hiddenRun.domRefreshCalls).toBe(0);
+
+      // Unhiding UI after hidden replay completion shows completed badge and 100% scrubber
+      state.update({ uiHidden: false });
+      const badge = (panel.floatingCardEl as unknown as MockEl).querySelector(
+        '#replay-phase-badge'
+      );
+      const scrubber = (panel.floatingCardEl as unknown as MockEl).querySelector(
+        '#replay-scrubber'
+      );
+      expect(badge.textContent).toBe('✅ 已复圆结束');
+      expect(scrubber.value).toBe('1000');
 
       // 3. SpaceView setHudVisible(false) explicitly hides space markers and removes pick menu
       let pickMenuRemoved = false;

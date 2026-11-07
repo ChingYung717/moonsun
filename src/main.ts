@@ -182,6 +182,9 @@ function bootstrap(): void {
       uiRoot.classList.toggle('ui-hidden', s.uiHidden);
       if (!s.uiHidden) {
         lastUiRefresh = -Infinity;
+        timePanel.refreshDisplay();
+        timeline.refreshDisplay();
+        eclipsePanel.refreshReplayProgress();
       }
     }
     if (changed.has('uiMode')) {

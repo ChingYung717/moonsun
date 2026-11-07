@@ -13,6 +13,7 @@ import {
   searchUpcomingLocalSolarEclipses,
 } from '../astro/eclipses/search';
 import { makeAstroTime } from '../astro/ephemeris';
+import { computeEclipseReplayMetrics, syncEclipseReplayState } from '../time/Clock';
 import { formatDateTime, formatTimeShort, inferTimezone, utcToLocalParts } from '../time/tz';
 import { MasterRenderer } from '../render/Renderer';
 import { showToast } from './Toast';
@@ -105,7 +106,11 @@ export class EclipsePanel {
       ) {
         this.renderFloatingCard(this.selectedEvent);
       }
-      if (changed.has('eclipseReplay')) {
+      if (
+        changed.has('eclipseReplay') ||
+        (changed.has('uiHidden') && !s.uiHidden) ||
+        (s.eclipseReplay && (changed.has('speedMultiplier') || changed.has('playing')))
+      ) {
         this.refreshReplayProgress();
       }
     });
@@ -908,6 +913,7 @@ export class EclipsePanel {
           u3UtcMs: u3,
         },
       });
+      syncEclipseReplayState(this.state);
 
       const progWrap = this.floatingCardEl.querySelector<HTMLElement>('#replay-progress-wrap');
       if (progWrap) progWrap.style.display = 'block';
@@ -920,12 +926,18 @@ export class EclipsePanel {
       const frac = parseFloat(scrubber.value) / 1000;
       const targetUtc = rep.startUtcMs + (rep.endUtcMs - rep.startUtcMs) * frac;
       this.state.setTimeUtc(targetUtc, true, true);
+      this.refreshReplayProgress();
     });
+
+    if (this.state.get().eclipseReplay) {
+      this.refreshReplayProgress();
+    }
   }
 
   /**
-   * Called in the main UI loop to update the smart variable-speed replay bar and automatically
-   * decelerate around totality/maximum eclipse (B5).
+   * Pure DOM refresh for the replay progress bar and phase badge (B5 / F1).
+   * Replay progression, variable-speed transitions, and auto-stop are handled by
+   * SimulationClock / syncEclipseReplayState so hiding UI never blocks replay control.
    */
   public refreshReplayProgress(): void {
     if (!this.isFloatingCardOpen) return;
@@ -943,41 +955,12 @@ export class EclipsePanel {
 
     if (progWrap) progWrap.style.display = 'block';
 
-    const span = Math.max(1000, rep.endUtcMs - rep.startUtcMs);
-    const frac = Math.max(0, Math.min(1, (s.timeUtc - rep.startUtcMs) / span));
+    const metrics = computeEclipseReplayMetrics(s.timeUtc, rep);
     if (scrubber) {
-      scrubber.value = String(Math.round(frac * 1000));
+      scrubber.value = String(Math.round(metrics.frac * 1000));
     }
-
-    if (s.timeUtc >= rep.endUtcMs && s.playing) {
-      this.state.update({
-        playing: false,
-        eclipseReplay: { ...rep, active: false },
-      });
-      if (badge) badge.textContent = '✅ 已复圆结束';
-      return;
-    }
-
-    if (rep.active && s.playing) {
-      const totalSpanSec = span / 1000;
-      const fastSpeed = Math.max(60, Math.round(totalSpanSec / 48));
-      const inTotalityWindow =
-        rep.u2UtcMs && rep.u3UtcMs
-          ? s.timeUtc >= rep.u2UtcMs - 90 * 1000 && s.timeUtc <= rep.u3UtcMs + 90 * 1000
-          : Math.abs(s.timeUtc - rep.peakUtcMs) < 5 * 60 * 1000;
-
-      const desiredSpeed = inTotalityWindow
-        ? Math.max(12, Math.round(fastSpeed * 0.22))
-        : fastSpeed;
-
-      if (Math.abs(s.speedMultiplier - desiredSpeed) > 5) {
-        this.state.update({ speedMultiplier: desiredSpeed });
-      }
-      if (badge) {
-        badge.textContent = inTotalityWindow
-          ? `🔥 食既~生光自动慢放 (${desiredSpeed}×)`
-          : `⏩ 偏食阶段快进 (${desiredSpeed}×)`;
-      }
+    if (badge) {
+      badge.textContent = metrics.badgeText;
     }
   }
 }

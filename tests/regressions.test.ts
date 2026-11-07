@@ -788,5 +788,65 @@ describe('Round-1 regressions', () => {
       expectPhaseMatch(computeMoonPhase(t), computeMoonPhaseUncached(t));
     }
   });
+
+  it('decouples eclipse replay speed transitions and auto-stop from uiHidden and UI throttling (F1)', async () => {
+    const { AppState } = await import('../src/state/AppState');
+    const { SimulationClock, FrameRunner, computeEclipseReplayMetrics } = await import(
+      '../src/time/Clock'
+    );
+
+    const startUtc = Date.UTC(2024, 3, 8, 17, 0, 0);
+    const peakUtc = Date.UTC(2024, 3, 8, 18, 18, 0);
+    const endUtc = Date.UTC(2024, 3, 8, 19, 36, 0);
+
+    // Replay without u2/u3 uses ±5min peak window
+    const runWithUiFlag = (uiHidden: boolean) => {
+      const st = new AppState({
+        timeUtc: startUtc,
+        playing: true,
+        isRealtimeSync: false,
+        speedMultiplier: 170,
+        uiHidden,
+        eclipseReplay: {
+          active: true,
+          startUtcMs: startUtc,
+          peakUtcMs: peakUtc,
+          endUtcMs: endUtc,
+          u2UtcMs: null,
+          u3UtcMs: null,
+        },
+      });
+      const clock = new SimulationClock(st);
+      const runner = new FrameRunner(st, clock, () => {});
+
+      runner.runFrame(1000);
+      const fastSpeed = st.get().speedMultiplier;
+      expect(fastSpeed).toBe(195);
+
+      // Inside ±5min peak window -> slows down to 22%
+      st.setTimeUtc(peakUtc - 60_000, false, true);
+      runner.runFrame(1050);
+      const slowSpeed = st.get().speedMultiplier;
+      expect(slowSpeed).toBe(Math.max(12, Math.round(fastSpeed * 0.22)));
+
+      // Past peak window -> resumes fast speed
+      st.setTimeUtc(peakUtc + 10 * 60_000, false, true);
+      runner.runFrame(1100);
+      expect(st.get().speedMultiplier).toBe(fastSpeed);
+
+      // Cross endUtc -> immediately pauses and marks active=false even when uiHidden=true
+      st.setTimeUtc(endUtc - 1000, false, true);
+      runner.runFrame(1200);
+      expect(st.get().playing).toBe(false);
+      expect(st.get().eclipseReplay?.active).toBe(false);
+      expect(computeEclipseReplayMetrics(st.get().timeUtc, st.get().eclipseReplay!).badgeText).toBe(
+        '✅ 已复圆结束'
+      );
+
+      return { fastSpeed, slowSpeed, endedPlaying: st.get().playing, endedActive: st.get().eclipseReplay?.active };
+    };
+
+    expect(runWithUiFlag(true)).toEqual(runWithUiFlag(false));
+  });
 });
 

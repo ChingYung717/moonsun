@@ -1,4 +1,68 @@
-import { AppState, sanitizeTimeUtc } from '../state/AppState';
+import { AppState, EclipseReplayState, sanitizeTimeUtc } from '../state/AppState';
+
+export interface EclipseReplayMetrics {
+  frac: number;
+  ended: boolean;
+  inTotalityWindow: boolean;
+  desiredSpeed: number;
+  badgeText: string;
+}
+
+export function computeEclipseReplayMetrics(
+  timeUtc: number,
+  rep: EclipseReplayState
+): EclipseReplayMetrics {
+  const span = Math.max(1000, rep.endUtcMs - rep.startUtcMs);
+  const frac = Math.max(0, Math.min(1, (timeUtc - rep.startUtcMs) / span));
+  const totalSpanSec = span / 1000;
+  const fastSpeed = Math.max(60, Math.round(totalSpanSec / 48));
+  const inTotalityWindow =
+    rep.u2UtcMs && rep.u3UtcMs
+      ? timeUtc >= rep.u2UtcMs - 90 * 1000 && timeUtc <= rep.u3UtcMs + 90 * 1000
+      : Math.abs(timeUtc - rep.peakUtcMs) < 5 * 60 * 1000;
+  const desiredSpeed = inTotalityWindow
+    ? Math.max(12, Math.round(fastSpeed * 0.22))
+    : fastSpeed;
+  const ended = !rep.active || timeUtc >= rep.endUtcMs;
+  const badgeText = ended
+    ? '✅ 已复圆结束'
+    : inTotalityWindow
+      ? `🔥 食既~生光自动慢放 (${desiredSpeed}×)`
+      : `⏩ 偏食阶段快进 (${desiredSpeed}×)`;
+  return {
+    frac,
+    ended,
+    inTotalityWindow,
+    desiredSpeed,
+    badgeText,
+  };
+}
+
+/**
+ * Advance/control eclipse replay playback state independently of DOM visibility or UI throttling:
+ * - Automatically stops playback and marks replay inactive when timeUtc >= endUtcMs
+ * - Automatically adjusts speedMultiplier between partial-phase fast-forward and totality slow-mo
+ */
+export function syncEclipseReplayState(state: AppState): void {
+  const s = state.get();
+  const rep = s.eclipseReplay;
+  if (!rep || !s.playing) return;
+
+  if (s.timeUtc >= rep.endUtcMs) {
+    state.update({
+      playing: false,
+      eclipseReplay: { ...rep, active: false },
+    });
+    return;
+  }
+
+  if (rep.active) {
+    const { desiredSpeed } = computeEclipseReplayMetrics(s.timeUtc, rep);
+    if (Math.abs(s.speedMultiplier - desiredSpeed) > 5) {
+      state.update({ speedMultiplier: desiredSpeed });
+    }
+  }
+}
 
 export class SimulationClock {
   private lastPerfNow = performance.now();
@@ -20,12 +84,19 @@ export class SimulationClock {
     const s = this.state.get();
     if (!s.playing) return;
 
+    if (s.eclipseReplay && s.timeUtc >= s.eclipseReplay.endUtcMs) {
+      syncEclipseReplayState(this.state);
+      return;
+    }
+
     if (s.isRealtimeSync && s.speedMultiplier === 1) {
       this.state.setTimeUtc(Date.now(), false);
     } else if (Number.isFinite(s.speedMultiplier)) {
       const nextUtc = s.timeUtc + dtSec * 1000 * s.speedMultiplier;
       this.state.setTimeUtc(nextUtc, false);
     }
+
+    syncEclipseReplayState(this.state);
   }
 
   stepByMs(deltaMs: number): void {
