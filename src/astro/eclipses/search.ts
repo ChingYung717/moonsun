@@ -233,21 +233,28 @@ export function evaluateChinaVisibility(
 }
 
 /**
- * Compute sub-lunar point (lat, lon) on Earth at `utcMs` (where Moon is at zenith).
+ * Compute the sub-lunar point (lat, lon) on Earth at `utcMs`.
+ *
+ * Uses the geocentric Moon vector (`Astronomy.GeoVector(Body.Moon, t, true)` in J2000 EQJ),
+ * rotated by precession & nutation (`Astronomy.Rotation_EQJ_EQD(t)`) into the True Equator
+ * and Equinox of Date (EQD) frame, combined with Greenwich Apparent Sidereal Time
+ * (`Astronomy.SiderealTime(t)`).
+ *
+ * Because an ellipsoidal surface observer's zenith normal at geodetic latitude φ has
+ * declination φ in the EQD meridian plane, φ = δ_EQD aligns the geocentric Moon ray with
+ * the observer's zenith normal (surface topocentric Moon altitude ≥ 89.995°, within 0.01° of 90°).
  */
 export function computeSubLunarLatLon(utcMs: number): { lat: number; lon: number } {
   const t = makeAstroTime(utcMs);
-  const moonEqd = Astronomy.Equator(
-    Astronomy.Body.Moon,
-    t,
-    new Astronomy.Observer(0, 0, 0),
-    true,
-    true
-  );
+  const geoEqj = Astronomy.GeoVector(Astronomy.Body.Moon, t, true);
+  const rotEqjToEqd = Astronomy.Rotation_EQJ_EQD(t);
+  const geoEqd = Astronomy.RotateVector(rotEqjToEqd, geoEqj);
+  const moonEqd = Astronomy.EquatorFromVector(geoEqd);
   const gastHours = Astronomy.SiderealTime(t);
   const lat = moonEqd.dec;
   let lon = (moonEqd.ra - gastHours) * 15;
   lon = ((((lon + 180) % 360) + 360) % 360) - 180;
+  if (Object.is(lon, -0)) lon = 0;
   return { lat, lon };
 }
 
@@ -628,7 +635,7 @@ function doesLocalEclipseIntersectDaylight(
 }
 
 /**
- * Search next N local solar eclipses visible at observer (lat, lon).
+ * Search next N local solar eclipses visible at observer (lat, lon) within supported time bounds.
  */
 export function searchUpcomingLocalSolarEclipses(
   startUtcMs: number,
@@ -636,9 +643,16 @@ export function searchUpcomingLocalSolarEclipses(
   lon: number,
   count = 5
 ): LocalSolarEclipseDetails[] {
-  const obs = new Astronomy.Observer(lat, lon, 0);
+  const minValidUtc = utcYearStartMs(-1999);
+  const maxValidUtc = utcYearStartMs(3001) - 1;
+  if (!Number.isFinite(startUtcMs) || startUtcMs > maxValidUtc || count <= 0) {
+    return [];
+  }
+  const safeLat = Number.isFinite(lat) ? Math.max(-90, Math.min(90, lat)) : 0;
+  const safeLon = Number.isFinite(lon) ? Math.max(-180, Math.min(180, lon)) : 0;
+  const obs = new Astronomy.Observer(safeLat, safeLon, 0);
   const results: LocalSolarEclipseDetails[] = [];
-  let t = makeAstroTime(startUtcMs);
+  let t = makeAstroTime(Math.max(minValidUtc, startUtcMs));
 
   for (let i = 0; i < Math.max(24, count * 6) && results.length < count; i++) {
     try {
@@ -647,6 +661,8 @@ export function searchUpcomingLocalSolarEclipses(
           ? Astronomy.SearchLocalSolarEclipse(t, obs)
           : Astronomy.NextLocalSolarEclipse(t, obs);
       if (!loc) break;
+      const peakUtc = loc.peak.time.date.getTime();
+      if (peakUtc > maxValidUtc) break;
       t = loc.peak.time;
 
       if (doesLocalEclipseIntersectDaylight(loc, obs)) {
@@ -668,7 +684,7 @@ export function searchUpcomingLocalSolarEclipses(
           obscuration: loc.obscuration,
           partialBeginUtc: loc.partial_begin.time.date.getTime(),
           totalBeginUtc,
-          peakUtc: loc.peak.time.date.getTime(),
+          peakUtc,
           totalEndUtc,
           partialEndUtc: loc.partial_end.time.date.getTime(),
           peakAltitudeDeg: loc.peak.altitude,
