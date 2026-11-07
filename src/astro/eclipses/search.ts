@@ -104,30 +104,6 @@ export function describeRegionZh(lat: number, lon: number): string {
  * so eclipses whose central path crosses China (even if greatest eclipse is in the Pacific or Russia)
  * are accurately recognized as 'central' in China!
  */
-const CHINA_PROBE_POINTS = [
-  { lat: 39.9, lon: 116.4 }, // Beijing
-  { lat: 30.6, lon: 114.3 }, // Wuhan
-  { lat: 31.2, lon: 121.5 }, // Shanghai
-  { lat: 24.5, lon: 118.1 }, // Xiamen
-  { lat: 23.1, lon: 113.3 }, // Guangzhou
-  { lat: 25.0, lon: 102.7 }, // Kunming
-  { lat: 25.6, lon: 100.3 }, // Dali
-  { lat: 29.6, lon: 106.5 }, // Chongqing
-  { lat: 30.7, lon: 104.1 }, // Chengdu
-  { lat: 36.1, lon: 120.4 }, // Qingdao
-  { lat: 34.3, lon: 108.9 }, // Xi'an
-  { lat: 35.4, lon: 103.9 }, // Lintao / Lanzhou
-  { lat: 39.8, lon: 98.3 },  // Jiayuguan
-  { lat: 43.8, lon: 87.6 },  // Urumqi
-  { lat: 39.5, lon: 76.0 },  // Kashgar
-  { lat: 32.5, lon: 80.1 },  // Ngari (Ali), Tibet
-  { lat: 29.7, lon: 91.1 },  // Lhasa
-  { lat: 53.0, lon: 122.5 }, // Mohe
-  { lat: 47.7, lon: 128.8 }, // Yichun / Harbin
-  { lat: 25.0, lon: 121.5 }, // Taipei
-  { lat: 18.3, lon: 109.5 }, // Sanya
-];
-
 export function evaluateChinaVisibility(
   kind: 'solar' | 'lunar',
   category: EclipseCategory,
@@ -322,7 +298,7 @@ export function utcYearStartMs(year: number): number {
  * Score an eclipse (0..100) with high weight for China visibility and spectacle!
  */
 export function computeEclipseScore(
-  kind: 'solar' | 'lunar',
+  _kind: 'solar' | 'lunar',
   category: EclipseCategory,
   obscuration: number,
   durationSeconds: number,

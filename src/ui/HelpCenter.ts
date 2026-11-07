@@ -40,7 +40,7 @@ export class HelpCenter {
       <div class="ms-help-head">
         <div>
           <h2>📘 使用说明与天文百科帮助中心</h2>
-          <span class="ms-help-sub">随时按 <code>?</code> 键打开或关闭 · 完整手册同步见 <code>docs/使用说明.md</code></span>
+          <span class="ms-help-sub">随时按 <code>?</code> 键打开或关闭 · 完整手册同步见 <a href="https://github.com/ChingYung717/moonsun/blob/main/docs/%E4%BD%BF%E7%94%A8%E8%AF%B4%E6%98%8E.md" target="_blank" rel="noopener noreferrer" style="color: var(--accent-blue); text-decoration: underline;">docs/使用说明.md ↗</a></span>
         </div>
         <button type="button" class="ms-card-close" id="help-close-btn" aria-label="关闭帮助中心">×</button>
       </div>

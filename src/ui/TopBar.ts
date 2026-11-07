@@ -9,7 +9,6 @@ import {
 import { MasterRenderer } from '../render/Renderer';
 import { SimulationClock } from '../time/Clock';
 import { computeEarthObserverSky } from '../astro/observer';
-import { computeEphemeris } from '../astro/ephemeris';
 import { showToast } from './Toast';
 import { termTipHtml } from './tooltips';
 

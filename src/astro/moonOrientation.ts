@@ -5,7 +5,6 @@ import { Vec3Astro, makeAstroTime } from './ephemeris';
 import { astroBasisToThreeMatrix4 } from './frames';
 
 const rotEqjToEcl = Astronomy.Rotation_EQJ_ECL();
-const rotEclToEqj = Astronomy.Rotation_ECL_EQJ();
 
 export interface MoonOrientation {
   /** Matrix4 transforming Moon-fixed local Three coords (0° lon facing +X_local) to Scene (J2000 Ecliptic Three coords) */

@@ -1,0 +1,20 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <defs>
+    <radialGradient id="sun" cx="35%" cy="35%" r="65%">
+      <stop offset="0%" stop-color="#fff4b8"/>
+      <stop offset="55%" stop-color="#ffb703"/>
+      <stop offset="100%" stop-color="#fb8500"/>
+    </radialGradient>
+    <radialGradient id="earth" cx="35%" cy="30%" r="70%">
+      <stop offset="0%" stop-color="#4cc9f0"/>
+      <stop offset="60%" stop-color="#1d4ed8"/>
+      <stop offset="100%" stop-color="#0b192c"/>
+    </radialGradient>
+  </defs>
+  <rect width="64" height="64" rx="14" fill="#070d1a"/>
+  <circle cx="24" cy="26" r="15" fill="url(#sun)"/>
+  <circle cx="38" cy="36" r="13" fill="url(#earth)" stroke="#90e0ef" stroke-width="1.2"/>
+  <circle cx="49" cy="18" r="6" fill="#e2e8f0"/>
+  <circle cx="47" cy="17" r="1.4" fill="#94a3b8"/>
+  <circle cx="51" cy="20" r="1.8" fill="#94a3b8"/>
+</svg>

@@ -206,18 +206,21 @@ function bootstrap(): void {
     }
   });
 
-  // Expose helper on window for debugging & programmatic E2E verification
-  (window as any).__MOONSUN__ = {
-    state,
-    clock,
-    renderer,
-    dock,
-    eclipsePanel,
-    timeline,
-    welcomeModal,
-    tour,
-    helpCenter,
-  };
+  // Expose helper on window only in development or when explicitly requested via ?debug=1 / ?audit=...
+  const debugParams = new URLSearchParams(window.location.search);
+  if (import.meta.env.DEV || debugParams.has('debug') || debugParams.has('audit')) {
+    (window as any).__MOONSUN__ = {
+      state,
+      clock,
+      renderer,
+      dock,
+      eclipsePanel,
+      timeline,
+      welcomeModal,
+      tour,
+      helpCenter,
+    };
+  }
 
   let lastUiRefresh = 0;
   function animate(now: number): void {
