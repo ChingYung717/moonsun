@@ -62,6 +62,7 @@ export class EclipsePanel {
         this.renderCuratedList();
       }
       let cardRenderedForSelection = false;
+      let lockSyncedForSelection = false;
       if (changed.has('selectedEclipseId')) {
         if (!s.selectedEclipseId) {
           this.selectedEvent = null;
@@ -76,9 +77,24 @@ export class EclipsePanel {
             this.isFloatingCardOpen = true;
             this.renderFloatingCard(resolved);
             cardRenderedForSelection = true;
+            if (s.viewMode === 'ground') {
+              this.renderer.groundView.setLockTarget(resolved.kind === 'solar' ? 'sun' : 'moon');
+              lockSyncedForSelection = true;
+            } else if (s.viewMode === 'moon') {
+              this.renderer.moonSurfaceView.setLockTarget('earth');
+              lockSyncedForSelection = true;
+            }
           }
         }
         this.syncSelectedHighlightInLists();
+      }
+      if (!lockSyncedForSelection) {
+        if (changed.has('groundLockTarget') && s.viewMode === 'ground') {
+          this.renderer.groundView.setLockTarget(s.groundLockTarget);
+        }
+        if (changed.has('moonLockTarget') && s.viewMode === 'moon') {
+          this.renderer.moonSurfaceView.setLockTarget(s.moonLockTarget);
+        }
       }
       if (
         !cardRenderedForSelection &&
@@ -248,9 +264,18 @@ export class EclipsePanel {
 
   private renderYearSearchList(): void {
     const yearInput = this.el.querySelector('#ecl-search-year') as HTMLInputElement;
-    const year = parseInt(yearInput.value, 10) || 2026;
-    const items = searchEclipsesInYear(year);
     const container = this.el.querySelector('#year-list')!;
+    const raw = yearInput.value.trim();
+    const year = raw === '' ? NaN : Number(raw);
+    if (!Number.isInteger(year) || year < -1999 || year > 3000) {
+      container.innerHTML = `<div class="empty-msg">请输入 -1999 至 3000 之间的整数天文年份（公元前1年为 0）</div>`;
+      showToast({
+        message: '⚠️ 请输入 -1999 至 3000 之间的整数年份（天文年 0 代表公元前1年）',
+        type: 'warn',
+      });
+      return;
+    }
+    const items = searchEclipsesInYear(year);
     this.populateEventList(container, items);
   }
 
@@ -276,11 +301,17 @@ export class EclipsePanel {
         const bjStr = formatDateTime(loc.peakUtc, 'Asia/Shanghai', true);
         const beginStr = formatDateTime(loc.partialBeginUtc, 'Asia/Shanghai', false);
         const endStr = formatDateTime(loc.partialEndUtc, 'Asia/Shanghai', false);
+        const horizonNote =
+          loc.peakAltitudeDeg <= 0
+            ? (loc.partialBeginAltitudeDeg ?? 0) > 0
+              ? ' (带食日落)'
+              : ' (带食日出)'
+            : '';
         return `
           <div class="eclipse-item" data-local-idx="${idx}">
             <div class="ecl-item-top">
               <span class="ecl-badge solar-${loc.kind}">${loc.typeLabelZh}</span>
-              <span class="ecl-title">本地最大食分 ${(loc.obscuration * 100).toFixed(1)}% · 太阳高度 ${loc.peakAltitudeDeg.toFixed(1)}°</span>
+              <span class="ecl-title">本地最大食分 ${(loc.obscuration * 100).toFixed(1)}% · 太阳高度 ${loc.peakAltitudeDeg.toFixed(1)}°${horizonNote}</span>
             </div>
             <div class="ecl-meta">
               食甚(北京): ${bjStr} | 初亏: ${beginStr.slice(11, 16)} ~ 复圆: ${endStr.slice(11, 16)}
@@ -303,6 +334,8 @@ export class EclipsePanel {
           viewMode: 'ground',
           activeEclipsePeakUtc: loc.peakUtc,
           activeEclipseKind: 'solar',
+          selectedEclipseId: null,
+          groundLockTarget: 'sun',
           eclipseReplay: null,
         });
         this.renderer.groundView.setLockTarget('sun');
@@ -399,7 +432,12 @@ export class EclipsePanel {
           if (
             loc &&
             Math.abs(loc.peak.time.date.getTime() - item.peakUtcMs) < 24 * 3600 * 1000 &&
-            loc.peak.altitude > -1
+            (loc.peak.altitude > -1 ||
+              Math.max(
+                loc.partial_begin.altitude,
+                loc.peak.altitude,
+                loc.partial_end.altitude
+              ) > 0)
           ) {
             contacts.push({
               code: 'U1',
@@ -592,6 +630,14 @@ export class EclipsePanel {
       selectedEclipseId: item.id,
       eclipseReplay: null,
       spaceCameraPreset: item.kind === 'solar' ? 'sunMoonLine' : 'moon',
+      groundLockTarget:
+        targetView === 'ground'
+          ? item.kind === 'solar'
+            ? 'sun'
+            : 'moon'
+          : this.state.get().groundLockTarget,
+      moonLockTarget:
+        targetView === 'moon' ? 'earth' : this.state.get().moonLockTarget,
     });
 
     if (targetView === 'ground') {
@@ -673,6 +719,13 @@ export class EclipsePanel {
       selectedEclipseId: item.id,
       eclipseReplay: null,
       spaceCameraPreset: item.kind === 'solar' ? 'sunMoonLine' : 'moon',
+      groundLockTarget:
+        targetView === 'ground'
+          ? item.kind === 'solar'
+            ? 'sun'
+            : 'moon'
+          : s.groundLockTarget,
+      moonLockTarget: targetView === 'moon' ? 'earth' : s.moonLockTarget,
     });
 
     if (targetView === 'ground') {

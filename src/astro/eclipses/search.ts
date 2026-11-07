@@ -65,6 +65,8 @@ export interface LocalSolarEclipseDetails {
   totalEndUtc: number | null;
   partialEndUtc: number;
   peakAltitudeDeg: number;
+  partialBeginAltitudeDeg?: number;
+  partialEndAltitudeDeg?: number;
   durationTotalSeconds: number;
 }
 
@@ -171,13 +173,7 @@ export function evaluateChinaVisibility(
     }
 
     // 2. Trace central shadow path (centerLine + north/south limits) against China boundary polygon
-    if (
-      (category === 'solar-total' || category === 'solar-annular') &&
-      peakLat >= -20 &&
-      peakLat <= 82 &&
-      peakLon >= 10 &&
-      peakLon <= 180
-    ) {
+    if (category === 'solar-total' || category === 'solar-annular') {
       const path = computeSolarEclipsePath(peakUtcMs);
       const pts = path.centerLine;
       for (let i = 0; i < pts.length; i++) {
@@ -202,36 +198,36 @@ export function evaluateChinaVisibility(
     }
 
     // 3. Probe China boundary/interior points for partial (or narrow grazing central) visibility
-    if (peakLat >= -25 && peakLat <= 85 && peakLon >= 10 && peakLon <= 178) {
-      const tStart = makeAstroTime(peakUtcMs - 2 * 86400 * 1000);
-      let sawPartialInChina = false;
-      for (const pt of CHINA_LUNAR_GRID_POINTS) {
-        try {
-          const loc = Astronomy.SearchLocalSolarEclipse(
-            tStart,
-            new Astronomy.Observer(pt.lat, pt.lon, 0)
-          );
+    const tStart = makeAstroTime(peakUtcMs - 2 * 86400 * 1000);
+    let sawPartialInChina = false;
+    for (const pt of CHINA_LUNAR_GRID_POINTS) {
+      try {
+        const loc = Astronomy.SearchLocalSolarEclipse(
+          tStart,
+          new Astronomy.Observer(pt.lat, pt.lon, 0)
+        );
+        if (loc && Math.abs(loc.peak.time.date.getTime() - peakUtcMs) < 36 * 3600 * 1000) {
           if (
-            loc &&
-            Math.abs(loc.peak.time.date.getTime() - peakUtcMs) < 36 * 3600 * 1000 &&
-            loc.peak.altitude > 0.5
+            loc.peak.altitude > 0.5 &&
+            (loc.kind === Astronomy.EclipseKind.Total ||
+              loc.kind === Astronomy.EclipseKind.Annular)
           ) {
-            if (
-              loc.kind === Astronomy.EclipseKind.Total ||
-              loc.kind === Astronomy.EclipseKind.Annular
-            ) {
-              return 'central';
-            }
-            if (loc.obscuration > 0.015) {
-              sawPartialInChina = true;
-            }
+            return 'central';
           }
-        } catch {
-          // ignore
+          const maxVisibleAlt = Math.max(
+            loc.partial_begin.altitude,
+            loc.peak.altitude,
+            loc.partial_end.altitude
+          );
+          if (maxVisibleAlt > 0.5 && loc.obscuration > 0.015) {
+            sawPartialInChina = true;
+          }
         }
+      } catch {
+        // ignore
       }
-      if (sawPartialInChina) return 'partial';
     }
+    if (sawPartialInChina) return 'partial';
     return 'none';
   }
 }
@@ -571,6 +567,9 @@ export function buildLunarEclipseItem(e: Astronomy.LunarEclipseInfo): EclipseEve
  * Search all solar and lunar eclipses in a given calendar year (or small year span).
  */
 export function searchEclipsesInYear(year: number): EclipseEventItem[] {
+  if (!Number.isInteger(year) || year < -1999 || year > 3000) {
+    return [];
+  }
   const startUtc = utcYearStartMs(year);
   const endUtc = utcYearStartMs(year + 1) + 86400000;
   const items: EclipseEventItem[] = [];
@@ -598,6 +597,37 @@ export function searchEclipsesInYear(year: number): EclipseEventItem[] {
 }
 
 /**
+ * Check whether the local solar eclipse interval [partial_begin, partial_end]
+ * intersects the period when the Sun is above the observer's horizon (altitude > 0).
+ * Covers full above-horizon eclipses, eclipse-at-sunset (带食日落), and eclipse-at-sunrise (带食日出).
+ */
+function doesLocalEclipseIntersectDaylight(
+  loc: Astronomy.LocalSolarEclipseInfo,
+  obs: Astronomy.Observer
+): boolean {
+  if (!(loc.obscuration > 0)) return false;
+  const maxContactAlt = Math.max(
+    loc.partial_begin.altitude,
+    loc.peak.altitude,
+    loc.partial_end.altitude,
+    loc.total_begin?.altitude ?? -90,
+    loc.total_end?.altitude ?? -90
+  );
+  if (maxContactAlt > 0) return true;
+  if (maxContactAlt > -5) {
+    const t0 = loc.partial_begin.time.date.getTime();
+    const t1 = loc.partial_end.time.date.getTime();
+    for (const frac of [0.25, 0.5, 0.75]) {
+      const ts = makeAstroTime(t0 + (t1 - t0) * frac);
+      const eq = Astronomy.Equator(Astronomy.Body.Sun, ts, obs, true, true);
+      const hor = Astronomy.Horizon(ts, obs, eq.ra, eq.dec, 'normal');
+      if (hor.altitude > 0) return true;
+    }
+  }
+  return false;
+}
+
+/**
  * Search next N local solar eclipses visible at observer (lat, lon).
  */
 export function searchUpcomingLocalSolarEclipses(
@@ -610,13 +640,16 @@ export function searchUpcomingLocalSolarEclipses(
   const results: LocalSolarEclipseDetails[] = [];
   let t = makeAstroTime(startUtcMs);
 
-  for (let i = 0; i < count * 3 && results.length < count; i++) {
+  for (let i = 0; i < Math.max(24, count * 6) && results.length < count; i++) {
     try {
-      const loc = i === 0 ? Astronomy.SearchLocalSolarEclipse(t, obs) : Astronomy.NextLocalSolarEclipse(t, obs);
+      const loc =
+        i === 0
+          ? Astronomy.SearchLocalSolarEclipse(t, obs)
+          : Astronomy.NextLocalSolarEclipse(t, obs);
       if (!loc) break;
       t = loc.peak.time;
 
-      if (loc.peak.altitude > 0) {
+      if (doesLocalEclipseIntersectDaylight(loc, obs)) {
         const kind =
           loc.kind === Astronomy.EclipseKind.Total
             ? 'total'
@@ -639,6 +672,8 @@ export function searchUpcomingLocalSolarEclipses(
           totalEndUtc,
           partialEndUtc: loc.partial_end.time.date.getTime(),
           peakAltitudeDeg: loc.peak.altitude,
+          partialBeginAltitudeDeg: loc.partial_begin.altitude,
+          partialEndAltitudeDeg: loc.partial_end.altitude,
           durationTotalSeconds,
         });
       }

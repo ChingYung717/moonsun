@@ -24,16 +24,21 @@ export class TopBar {
     this.el = document.createElement('header');
     this.el.className = 'topbar glass-panel';
     this.render();
-    this.state.subscribe((_, changed) => {
-      if (changed.has('viewMode') && this.state.get().viewMode === 'ground') {
-        const s = this.state.get();
-        const sky = computeEarthObserverSky(
-          s.timeUtc,
-          s.earthObserver.lat,
-          s.earthObserver.lon,
-          s.earthObserver.elevation
-        );
-        this.renderer.groundView.autoAimOnEnter(sky);
+    this.state.subscribe((s, changed) => {
+      if (changed.has('viewMode') && s.viewMode === 'ground' && !changed.has('groundLockTarget')) {
+        if (s.activeEclipseKind === 'solar') {
+          this.renderer.groundView.setLockTarget('sun');
+        } else if (s.activeEclipseKind === 'lunar') {
+          this.renderer.groundView.setLockTarget('moon');
+        } else {
+          const sky = computeEarthObserverSky(
+            s.timeUtc,
+            s.earthObserver.lat,
+            s.earthObserver.lon,
+            s.earthObserver.elevation
+          );
+          this.renderer.groundView.autoAimOnEnter(sky);
+        }
       }
       this.syncActiveButtons();
     });

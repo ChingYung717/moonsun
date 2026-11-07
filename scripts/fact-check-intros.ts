@@ -265,6 +265,23 @@ export function runFactCheck(): FactCheckDiscrepancy[] {
         });
       }
     }
+
+    // 7. Check China visibility consistency when title or intro claims visibility in China
+    if (
+      item.year >= 1600 &&
+      /(?:中国|新疆|西藏|黑龙江|漠河|海南|台湾|华南|华北|东北)[^。；（）]*可见/.test(fullText) &&
+      !fullText.includes('中国正值白昼不可见') &&
+      !fullText.includes('中国不可见') &&
+      item.chinaVisibility === 'none'
+    ) {
+      discrepancies.push({
+        key,
+        field: 'china-visibility',
+        claimed: 'visible in China',
+        computed: item.chinaVisibility,
+        detail: `Text claims visibility in China but evaluateChinaVisibility returned 'none'`,
+      });
+    }
   }
 
   return discrepancies;

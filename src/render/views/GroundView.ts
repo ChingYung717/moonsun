@@ -249,6 +249,12 @@ export class GroundView {
 
     this.setupHudLabels();
     this.setupControls(canvas);
+    this.state.subscribe((s, changed) => {
+      if (changed.has('groundLockTarget') && this.lockTarget !== s.groundLockTarget) {
+        this.lockTarget = s.groundLockTarget;
+        this.notifyLockChange();
+      }
+    });
   }
 
   public onLockChange(cb: () => void): void {
@@ -261,6 +267,7 @@ export class GroundView {
 
   public setLockTarget(target: 'free' | 'sun' | 'moon', sky?: EarthObserverSky): void {
     this.lockTarget = target;
+    this.state.update({ groundLockTarget: target });
     if (sky && (target === 'sun' || target === 'moon')) {
       this.aimAt(target, sky);
     } else {
@@ -281,6 +288,7 @@ export class GroundView {
       this.aimAt('moon', sky);
     } else {
       this.lockTarget = 'free';
+      this.state.update({ groundLockTarget: 'free' });
       this.lookAzimuthDeg = sky.moon.azimuthDeg;
       this.lookAltitudeDeg = 20;
       this.notifyLockChange();
@@ -314,8 +322,7 @@ export class GroundView {
             if (events.moonriseUtc) {
               this.state.pushUndoSnapshot('跳到月出');
               this.state.setTimeUtc(events.moonriseUtc + 10 * 60 * 1000, true);
-              this.lockTarget = 'moon';
-              this.notifyLockChange();
+              this.setLockTarget('moon');
             }
           },
         });
@@ -328,8 +335,7 @@ export class GroundView {
             if (events.sunriseUtc) {
               this.state.pushUndoSnapshot('跳到日出');
               this.state.setTimeUtc(events.sunriseUtc + 15 * 60 * 1000, true);
-              this.lockTarget = 'sun';
-              this.notifyLockChange();
+              this.setLockTarget('sun');
             }
           },
         });
@@ -342,8 +348,7 @@ export class GroundView {
             if (events.moonriseUtc) {
               this.state.pushUndoSnapshot('跳到月出');
               this.state.setTimeUtc(events.moonriseUtc + 10 * 60 * 1000, true);
-              this.lockTarget = 'moon';
-              this.notifyLockChange();
+              this.setLockTarget('moon');
             }
           },
         });
@@ -383,16 +388,14 @@ export class GroundView {
     sunEl.type = 'button';
     sunEl.className = 'ms-sky-label ms-sky-label-sun';
     sunEl.addEventListener('click', () => {
-      this.lockTarget = 'sun';
-      this.notifyLockChange();
+      this.setLockTarget('sun');
     });
 
     const moonEl = document.createElement('button');
     moonEl.type = 'button';
     moonEl.className = 'ms-sky-label ms-sky-label-moon';
     moonEl.addEventListener('click', () => {
-      this.lockTarget = 'moon';
-      this.notifyLockChange();
+      this.setLockTarget('moon');
     });
 
     overlay.append(sunEl, moonEl);
@@ -483,8 +486,7 @@ export class GroundView {
       this.prevPointer = { x: e.clientX, y: e.clientY };
 
       if (Math.hypot(dx, dy) > 2 && this.lockTarget !== 'free') {
-        this.lockTarget = 'free';
-        this.notifyLockChange();
+        this.setLockTarget('free');
       }
       const fovScale = this.state.get().groundFov / 60;
       this.lookAzimuthDeg = (((this.lookAzimuthDeg - dx * 0.18 * fovScale) % 360) + 360) % 360;
@@ -548,6 +550,7 @@ export class GroundView {
 
   public aimAt(target: 'sun' | 'moon', sky: EarthObserverSky): void {
     this.lockTarget = target;
+    this.state.update({ groundLockTarget: target });
     if (target === 'sun') {
       this.lookAzimuthDeg = sky.sun.azimuthDeg;
       this.lookAltitudeDeg = clamp(sky.sun.altitudeDeg, -20, 89);

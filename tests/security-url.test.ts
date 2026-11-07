@@ -92,6 +92,7 @@ describe('Security & URL State Serialization Regressions (B3)', () => {
       public dataset: Record<string, string> = {};
       public children: MockEl[] = [];
       public firstElementChild: MockEl | null = null;
+      public parent: MockEl | null = null;
       public classList = {
         add: () => {},
         remove: () => {},
@@ -108,6 +109,7 @@ describe('Security & URL State Serialization Regressions (B3)', () => {
 
       setAttribute(): void {}
       appendChild(child: MockEl): MockEl {
+        child.parent = this;
         this.children.push(child);
         this.firstElementChild = this.children[0] ?? null;
         return child;
@@ -149,7 +151,13 @@ describe('Security & URL State Serialization Regressions (B3)', () => {
         return [];
       }
 
-      remove(): void {}
+      remove(): void {
+        if (this.parent) {
+          this.parent.children = this.parent.children.filter((c) => c !== this);
+          this.parent.firstElementChild = this.parent.children[0] ?? null;
+          this.parent = null;
+        }
+      }
     }
 
     const prevDoc = (globalThis as Record<string, unknown>).document;
@@ -168,9 +176,27 @@ describe('Security & URL State Serialization Regressions (B3)', () => {
 
     try {
       const state = new AppState();
+      let currentGroundLock: 'free' | 'sun' | 'moon' = 'sun';
+      let currentMoonLock: 'earth' | 'sun' | 'free' = 'earth';
       const mockRenderer = {
-        groundView: { setLockTarget: () => {} },
-        moonSurfaceView: { setLockTarget: () => {} },
+        groundView: {
+          get lockTarget() {
+            return currentGroundLock;
+          },
+          setLockTarget: (t: 'free' | 'sun' | 'moon') => {
+            currentGroundLock = t;
+            state.update({ groundLockTarget: t });
+          },
+        },
+        moonSurfaceView: {
+          get lockTarget() {
+            return currentMoonLock;
+          },
+          setLockTarget: (t: 'earth' | 'sun' | 'free') => {
+            currentMoonLock = t;
+            state.update({ moonLockTarget: t });
+          },
+        },
         spaceView: { setHudVisible: () => {} },
       } as unknown as ConstructorParameters<typeof EclipsePanel>[1];
 
@@ -178,21 +204,54 @@ describe('Security & URL State Serialization Regressions (B3)', () => {
       const e2009 = CURATED_ECLIPSE_CATALOG.find((x) => x.id === 'solar-2009-07-22')!;
       const e2018 = CURATED_ECLIPSE_CATALOG.find((x) => x.id === 'lunar-2018-07-27')!;
 
-      // 1. Select 2009 solar eclipse, then 2018 lunar eclipse, then undo
-      panel.selectEclipseEvent(e2009, 'ground');
-      expect(state.get().selectedEclipseId).toBe('solar-2009-07-22');
-      expect(panel.floatingCardEl.innerHTML).toContain(e2009.titleZh);
-
+      // 1a. Select 2018 lunar eclipse, then 2009 solar eclipse, then undo -> must restore Moon lock target!
       panel.selectEclipseEvent(e2018, 'ground');
       expect(state.get().selectedEclipseId).toBe('lunar-2018-07-27');
+      expect(currentGroundLock).toBe('moon');
       expect(panel.floatingCardEl.innerHTML).toContain(e2018.titleZh);
 
-      const undone = state.undoLastJump();
-      expect(undone).toBeTruthy();
+      panel.selectEclipseEvent(e2009, 'ground');
       expect(state.get().selectedEclipseId).toBe('solar-2009-07-22');
-      // Card and contact buttons must be synced back to 2009 solar eclipse!
+      expect(currentGroundLock).toBe('sun');
       expect(panel.floatingCardEl.innerHTML).toContain(e2009.titleZh);
-      expect(panel.floatingCardEl.innerHTML).not.toContain(e2018.titleZh);
+
+      const undoneToLunar = state.undoLastJump();
+      expect(undoneToLunar).toBeTruthy();
+      expect(state.get().selectedEclipseId).toBe('lunar-2018-07-27');
+      expect(currentGroundLock).toBe('moon');
+      expect(state.get().groundLockTarget).toBe('moon');
+      expect(panel.floatingCardEl.innerHTML).toContain(e2018.titleZh);
+      expect(panel.floatingCardEl.innerHTML).not.toContain(e2009.titleZh);
+
+      // 1b. Select 2009 solar eclipse, then 2018 lunar eclipse, then undo -> must restore Sun lock target!
+      panel.selectEclipseEvent(e2009, 'ground');
+      expect(currentGroundLock).toBe('sun');
+      panel.selectEclipseEvent(e2018, 'ground');
+      expect(currentGroundLock).toBe('moon');
+      const undoneToSolar = state.undoLastJump();
+      expect(undoneToSolar).toBeTruthy();
+      expect(state.get().selectedEclipseId).toBe('solar-2009-07-22');
+      expect(currentGroundLock).toBe('sun');
+      expect(panel.floatingCardEl.innerHTML).toContain(e2009.titleZh);
+
+      // 1c. Year search input: astronomical year 0 must return year 0 (公元前1年), not 2026
+      const panelEl = panel.el as unknown as MockEl;
+      const yearInput = panelEl.querySelector('#ecl-search-year');
+      const yearBtn = panelEl.querySelector('#btn-search-year');
+      const yearList = panelEl.querySelector('#year-list');
+      yearInput.value = '0';
+      yearBtn.trigger('click');
+      expect(yearList.innerHTML).toContain('0000-');
+      expect(yearList.innerHTML).toContain('公元前1年');
+      expect(yearList.innerHTML).not.toContain('2026-');
+
+      // Invalid/non-integer/out-of-range year inputs must show validation message, not 2026
+      for (const badYear of ['', '2026.5', '3001', '-2000', 'abc']) {
+        yearInput.value = badYear;
+        yearBtn.trigger('click');
+        expect(yearList.innerHTML).toContain('请输入 -1999 至 3000 之间的整数天文年份');
+        expect(yearList.innerHTML).not.toContain('2026-');
+      }
 
       // 2. Restore 2024 North American eclipse with Beijing observer preserved in URL
       const e2024 = CURATED_ECLIPSE_CATALOG.find((x) => x.id === 'solar-2024-04-08')!;

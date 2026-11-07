@@ -57,6 +57,8 @@ export interface UndoSnapshot {
   speedMultiplier: number;
   viewMode: ViewMode;
   spaceCameraPreset: SpaceCameraPreset;
+  groundLockTarget: 'free' | 'sun' | 'moon';
+  moonLockTarget: 'earth' | 'sun' | 'free';
   earthObserver: EarthLocation;
   moonObserver: MoonLocation;
   activeEclipsePeakUtc: number | null;
@@ -73,6 +75,8 @@ export interface AppStateData {
   scaleMode: ScaleMode;
   uiMode: UiMode;
   spaceCameraPreset: SpaceCameraPreset;
+  groundLockTarget: 'free' | 'sun' | 'moon';
+  moonLockTarget: 'earth' | 'sun' | 'free';
   earthObserver: EarthLocation;
   moonObserver: MoonLocation;
   groundBodyScale: number; // 1 = true angular size (~0.5 deg), up to 8x for easier visual inspection
@@ -126,6 +130,8 @@ export class AppState {
       scaleMode: 'schematic',
       uiMode: loadSavedUiMode(),
       spaceCameraPreset: 'earth',
+      groundLockTarget: 'sun',
+      moonLockTarget: 'earth',
       earthObserver: {
         name: '北京',
         lat: 39.9042,
@@ -201,6 +207,8 @@ export class AppState {
       speedMultiplier: this.data.speedMultiplier,
       viewMode: this.data.viewMode,
       spaceCameraPreset: this.data.spaceCameraPreset,
+      groundLockTarget: this.data.groundLockTarget,
+      moonLockTarget: this.data.moonLockTarget,
       earthObserver: { ...this.data.earthObserver },
       moonObserver: { ...this.data.moonObserver },
       activeEclipsePeakUtc: this.data.activeEclipsePeakUtc,
@@ -220,6 +228,13 @@ export class AppState {
   undoLastJump(): UndoSnapshot | null {
     const snap = this.undoStack.pop();
     if (!snap) return null;
+    const restoredGroundLock =
+      snap.activeEclipseKind === 'solar'
+        ? 'sun'
+        : snap.activeEclipseKind === 'lunar'
+          ? 'moon'
+          : snap.groundLockTarget;
+    const restoredMoonLock = snap.activeEclipseKind ? 'earth' : snap.moonLockTarget;
     this.update({
       timeUtc: snap.timeUtc,
       isRealtimeSync: snap.isRealtimeSync,
@@ -227,6 +242,8 @@ export class AppState {
       speedMultiplier: snap.speedMultiplier,
       viewMode: snap.viewMode,
       spaceCameraPreset: snap.spaceCameraPreset,
+      groundLockTarget: restoredGroundLock,
+      moonLockTarget: restoredMoonLock,
       earthObserver: { ...snap.earthObserver },
       moonObserver: { ...snap.moonObserver },
       activeEclipsePeakUtc: snap.activeEclipsePeakUtc,

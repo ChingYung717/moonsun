@@ -62,6 +62,9 @@ export class WelcomeModal {
         speedMultiplier: 1,
         isRealtimeSync: true,
         viewMode: 'ground',
+        activeEclipsePeakUtc: null,
+        activeEclipseKind: null,
+        selectedEclipseId: null,
         eclipseReplay: null,
       });
       showToast('🌤 已进入当前时刻地面天空视角（拖动画面可环顾四周）');

@@ -186,6 +186,12 @@ export class MoonSurfaceView {
 
     this.setupHudLabels();
     this.setupControls(canvas);
+    this.state.subscribe((s, changed) => {
+      if (changed.has('moonLockTarget') && this.lockTarget !== s.moonLockTarget) {
+        this.lockTarget = s.moonLockTarget;
+        this.notifyLockChange();
+      }
+    });
   }
 
   public onLockChange(cb: () => void): void {
@@ -198,6 +204,7 @@ export class MoonSurfaceView {
 
   public setLockTarget(target: 'earth' | 'sun' | 'free'): void {
     this.lockTarget = target;
+    this.state.update({ moonLockTarget: target });
     this.notifyLockChange();
   }
 
@@ -240,8 +247,7 @@ export class MoonSurfaceView {
       const dy = e.clientY - this.prevPointer.y;
       this.prevPointer = { x: e.clientX, y: e.clientY };
       if (Math.hypot(dx, dy) > 2 && this.lockTarget !== 'free') {
-        this.lockTarget = 'free';
-        this.notifyLockChange();
+        this.setLockTarget('free');
       }
       const fovScale = this.state.get().groundFov / 60;
       this.lookAzimuthDeg = (((this.lookAzimuthDeg - dx * 0.2 * fovScale) % 360) + 360) % 360;

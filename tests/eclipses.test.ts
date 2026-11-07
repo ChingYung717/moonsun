@@ -118,4 +118,48 @@ describe('Solar & Lunar Eclipses + Curated Catalog', () => {
     expect(loc.obscuration).toBeCloseTo(mar29!.obscuration, 2);
     expect(loc.peak.altitude).toBeGreaterThan(0);
   });
+
+  it('recognizes China partial visibility when global peak is in Western Hemisphere (2021-06-10) or south of -25° (2009-01-26)', () => {
+    const e2021 = searchEclipsesInYear(2021).find((x) => x.id === 'solar-2021-06-10');
+    expect(e2021).toBeDefined();
+    expect(e2021!.peakLon).toBeLessThan(0); // Greatest eclipse in northern Canada/Greenland
+    expect(e2021!.chinaVisibility).toBe('partial');
+    expect(e2021!.chinaVisibilityLabelZh).toBe('中国可见偏食');
+
+    const cat2021 = CURATED_ECLIPSE_CATALOG.find((x) => x.id === 'solar-2021-06-10');
+    expect(cat2021).toBeDefined();
+    expect(cat2021!.chinaVisibility).toBe('partial');
+    expect(cat2021!.chinaVisibilityLabelZh).toBe('中国可见偏食');
+
+    const cat2009Jan = CURATED_ECLIPSE_CATALOG.find((x) => x.id === 'solar-2009-01-26');
+    expect(cat2009Jan).toBeDefined();
+    expect(cat2009Jan!.chinaVisibility).toBe('partial');
+  });
+
+  it('includes eclipse-at-sunset (带食日落) events in searchUpcomingLocalSolarEclipses (e.g. Beijing 2021-06-10)', () => {
+    const beijingLocals = searchUpcomingLocalSolarEclipses(
+      Date.UTC(2021, 4, 1),
+      39.9042,
+      116.4074,
+      5
+    );
+    expect(beijingLocals.length).toBe(5);
+    const first = beijingLocals[0];
+    // First upcoming visible solar eclipse in Beijing after 2021-05-01 is 2021-06-10 (U1 altitude ~1.56°, peak below horizon)
+    expect(new Date(first.peakUtc).toISOString().slice(0, 10)).toBe('2021-06-10');
+    expect(first.partialBeginAltitudeDeg).toBeGreaterThan(1.0);
+    expect(first.peakAltitudeDeg).toBeLessThan(0);
+    expect(first.obscuration).toBeGreaterThan(0.2);
+  });
+
+  it('searches astronomical year 0 (1 BC) accurately and rejects non-integer or out-of-range years', () => {
+    const year0 = searchEclipsesInYear(0);
+    expect(year0.length).toBeGreaterThan(0);
+    expect(year0.every((x) => x.year === 0)).toBe(true);
+    expect(year0.some((x) => x.id.startsWith('solar-0000-') || x.id.startsWith('lunar-0000-'))).toBe(true);
+
+    expect(searchEclipsesInYear(2026.5)).toEqual([]);
+    expect(searchEclipsesInYear(-2000)).toEqual([]);
+    expect(searchEclipsesInYear(3001)).toEqual([]);
+  });
 });
