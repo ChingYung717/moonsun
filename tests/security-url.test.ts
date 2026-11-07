@@ -472,9 +472,9 @@ describe('Security & URL State Serialization Regressions (B3 / MS-03 / MS-04 / M
           nowPerf += 100;
           runner.runFrame(nowPerf);
 
-          // Must stop immediately even while uiHidden === true
+          // Must stop immediately and clamp exactly to endUtcMs even while uiHidden === true
           const finalState = state.get();
-          expect(finalState.timeUtc).toBeGreaterThanOrEqual(rep0.endUtcMs);
+          expect(finalState.timeUtc).toBe(rep0.endUtcMs);
           expect(finalState.playing).toBe(false);
           expect(finalState.eclipseReplay?.active).toBe(false);
 
@@ -525,12 +525,13 @@ describe('Security & URL State Serialization Regressions (B3 / MS-03 / MS-04 / M
       expect(badge.textContent).toBe('✅ 已复圆结束');
       expect(scrubber.value).toBe('1000');
 
-      // Dragging scrubber back to 50% (totality) after completion reactivates replay and updates badge & speed
+      // Dragging scrubber back to 50% (totality) after completion reactivates replay in paused state and updates badge & speed
       scrubber.value = '500';
       scrubber.trigger('input');
       expect(state.get().eclipseReplay?.active).toBe(true);
+      expect(state.get().playing).toBe(false);
       expect(state.get().speedMultiplier).toBe(hiddenRun.totalitySlowSpeed);
-      expect(badge.textContent).toContain('🔥 食既~生光自动慢放');
+      expect(badge.textContent).toContain('⏸ 已暂停 · 🔥 食既~生光自动慢放');
 
       // 3. SpaceView setHudVisible(false) explicitly hides space markers and removes pick menu
       let pickMenuRemoved = false;

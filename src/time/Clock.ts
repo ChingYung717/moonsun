@@ -1,4 +1,4 @@
-import { AppState, EclipseReplayState, sanitizeTimeUtc } from '../state/AppState';
+import { AppState, EclipseReplayState, UndoSnapshot, sanitizeTimeUtc } from '../state/AppState';
 
 export interface EclipseReplayMetrics {
   frac: number;
@@ -10,7 +10,8 @@ export interface EclipseReplayMetrics {
 
 export function computeEclipseReplayMetrics(
   timeUtc: number,
-  rep: EclipseReplayState
+  rep: EclipseReplayState,
+  playing = true
 ): EclipseReplayMetrics {
   const span = Math.max(1000, rep.endUtcMs - rep.startUtcMs);
   const frac = Math.max(0, Math.min(1, (timeUtc - rep.startUtcMs) / span));
@@ -24,11 +25,14 @@ export function computeEclipseReplayMetrics(
     ? Math.max(12, Math.round(fastSpeed * 0.22))
     : fastSpeed;
   const ended = !rep.active || timeUtc >= rep.endUtcMs;
+  const phaseLabel = inTotalityWindow
+    ? `🔥 食既~生光自动慢放 (${desiredSpeed}×)`
+    : `⏩ 偏食阶段快进 (${desiredSpeed}×)`;
   const badgeText = ended
     ? '✅ 已复圆结束'
-    : inTotalityWindow
-      ? `🔥 食既~生光自动慢放 (${desiredSpeed}×)`
-      : `⏩ 偏食阶段快进 (${desiredSpeed}×)`;
+    : playing
+      ? phaseLabel
+      : `⏸ 已暂停 · ${phaseLabel}`;
   return {
     frac,
     ended,
@@ -40,7 +44,7 @@ export function computeEclipseReplayMetrics(
 
 /**
  * Advance/control eclipse replay playback state independently of DOM visibility or UI throttling:
- * - Automatically stops playback and marks replay inactive when timeUtc >= endUtcMs
+ * - Automatically stops playback, clamps timeUtc to endUtcMs, and marks replay inactive when timeUtc >= endUtcMs
  * - Automatically adjusts speedMultiplier between partial-phase fast-forward and totality slow-mo
  */
 export function syncEclipseReplayState(state: AppState): void {
@@ -50,6 +54,7 @@ export function syncEclipseReplayState(state: AppState): void {
 
   if (s.timeUtc >= rep.endUtcMs) {
     state.update({
+      timeUtc: rep.endUtcMs,
       playing: false,
       isRealtimeSync: false,
       eclipseReplay: { ...rep, active: false },
@@ -57,13 +62,159 @@ export function syncEclipseReplayState(state: AppState): void {
     return;
   }
 
-  const { desiredSpeed } = computeEclipseReplayMetrics(s.timeUtc, rep);
+  const { desiredSpeed } = computeEclipseReplayMetrics(s.timeUtc, rep, s.playing);
   const needSpeedUpdate = Math.abs(s.speedMultiplier - desiredSpeed) > 5;
   if (needSpeedUpdate || s.isRealtimeSync) {
     state.update({
       ...(needSpeedUpdate ? { speedMultiplier: desiredSpeed } : {}),
       ...(s.isRealtimeSync ? { isRealtimeSync: false } : {}),
     });
+  }
+}
+
+/**
+ * Unified play/pause toggle shared by Space shortcut, TopBar #top-play-btn, and TimePanel #btn-play-toggle:
+ * - If an active eclipse replay is in progress (or scrubbed to < endUtcMs while paused), toggles
+ *   playing/paused while preserving eclipseReplay and syncing replay speed.
+ * - If an eclipse replay has already finished (!active || timeUtc >= endUtcMs) and the user
+ *   resumes playback, clears the finished eclipseReplay and restores 1× normal speed so simulation
+ *   does not run away at ~200× with a stale "✅ 已复圆结束" badge.
+ */
+export function togglePlayPause(state: AppState): void {
+  const s = state.get();
+  const rep = s.eclipseReplay;
+
+  if (s.playing) {
+    if (rep && (!rep.active || s.timeUtc >= rep.endUtcMs)) {
+      state.update({
+        playing: false,
+        isRealtimeSync: false,
+        eclipseReplay: null,
+      });
+    } else {
+      state.update({
+        playing: false,
+        isRealtimeSync: false,
+      });
+    }
+    return;
+  }
+
+  if (rep) {
+    if (rep.active && s.timeUtc < rep.endUtcMs) {
+      const metrics = computeEclipseReplayMetrics(s.timeUtc, rep, true);
+      state.update({
+        playing: true,
+        isRealtimeSync: false,
+        speedMultiplier: metrics.desiredSpeed,
+      });
+      return;
+    }
+    state.update({
+      playing: true,
+      isRealtimeSync: false,
+      eclipseReplay: null,
+      speedMultiplier: 1,
+    });
+    return;
+  }
+
+  state.update({
+    playing: true,
+    isRealtimeSync: false,
+  });
+}
+
+export interface GlobalKeydownContext {
+  state: AppState;
+  clock: SimulationClock;
+  activeElement?: unknown;
+  onToggleHelp?: () => void;
+  onNotifyResetToNow?: () => void;
+  onNotifyUndo?: (snap: UndoSnapshot) => void;
+}
+
+export function shouldIgnoreGlobalKeydown(
+  activeEl: unknown,
+  e: Pick<KeyboardEvent, 'code' | 'key'>
+): boolean {
+  if (!activeEl || typeof activeEl !== 'object') return false;
+  const tagName =
+    typeof (activeEl as { tagName?: unknown }).tagName === 'string'
+      ? ((activeEl as { tagName: string }).tagName || '').toUpperCase()
+      : '';
+  const isSelect =
+    (typeof HTMLSelectElement !== 'undefined' && activeEl instanceof HTMLSelectElement) ||
+    tagName === 'SELECT';
+  const isTextArea =
+    (typeof HTMLTextAreaElement !== 'undefined' && activeEl instanceof HTMLTextAreaElement) ||
+    tagName === 'TEXTAREA';
+  if (isSelect || isTextArea) {
+    return true;
+  }
+  const isInput =
+    (typeof HTMLInputElement !== 'undefined' && activeEl instanceof HTMLInputElement) ||
+    tagName === 'INPUT';
+  if (isInput) {
+    const inputType =
+      typeof (activeEl as { type?: unknown }).type === 'string'
+        ? (activeEl as { type: string }).type.toLowerCase()
+        : '';
+    if (
+      inputType === 'range' &&
+      (e.code === 'Space' || e.key === ' ' || e.key === 'h' || e.key === 'H')
+    ) {
+      return false;
+    }
+    return true;
+  }
+  return false;
+}
+
+export function handleGlobalKeydown(
+  e: Pick<KeyboardEvent, 'code' | 'key' | 'shiftKey' | 'defaultPrevented' | 'preventDefault'>,
+  ctx: GlobalKeydownContext
+): void {
+  if (e.defaultPrevented) return;
+  const activeEl =
+    ctx.activeElement !== undefined
+      ? ctx.activeElement
+      : typeof document !== 'undefined'
+        ? document.activeElement
+        : null;
+  if (shouldIgnoreGlobalKeydown(activeEl, e)) {
+    return;
+  }
+  const { state, clock } = ctx;
+  if (e.code === 'Space' || e.key === ' ') {
+    e.preventDefault?.();
+    togglePlayPause(state);
+  } else if (e.key === 'h' || e.key === 'H') {
+    state.update({ uiHidden: !state.get().uiHidden });
+  } else if (e.key === 'n' || e.key === 'N') {
+    clock.resetToNow();
+    ctx.onNotifyResetToNow?.();
+  } else if (e.key === '1') {
+    state.update({ viewMode: 'space' });
+  } else if (e.key === '2') {
+    state.update({ viewMode: 'ground' });
+  } else if (e.key === '3') {
+    state.update({ viewMode: 'moon' });
+  } else if (e.key === 'ArrowRight') {
+    clock.stepByMs(e.shiftKey ? 86400000 : 60000);
+  } else if (e.key === 'ArrowLeft') {
+    clock.stepByMs(e.shiftKey ? -86400000 : -60000);
+  } else if (e.key === '?' || (e.shiftKey && e.code === 'Slash')) {
+    e.preventDefault?.();
+    ctx.onToggleHelp?.();
+  } else if (e.key === 'Backspace') {
+    if (state.canUndo()) {
+      e.preventDefault?.();
+      const snap = state.undoLastJump();
+      if (snap) {
+        ctx.onNotifyUndo?.(snap);
+      }
+    }
   }
 }
 
@@ -86,8 +237,16 @@ export class SimulationClock {
 
     if (!this.state.get().playing) return;
 
-    if (this.state.get().eclipseReplay?.active) {
-      syncEclipseReplayState(this.state);
+    const pre = this.state.get();
+    if (pre.eclipseReplay) {
+      if (pre.eclipseReplay.active) {
+        syncEclipseReplayState(this.state);
+      } else if (pre.timeUtc >= pre.eclipseReplay.endUtcMs) {
+        this.state.update({
+          eclipseReplay: null,
+          speedMultiplier: 1,
+        });
+      }
     }
 
     const s = this.state.get();
@@ -96,7 +255,11 @@ export class SimulationClock {
     if (s.isRealtimeSync && s.speedMultiplier === 1 && !s.eclipseReplay?.active) {
       this.state.setTimeUtc(Date.now(), false);
     } else if (Number.isFinite(s.speedMultiplier)) {
-      const nextUtc = s.timeUtc + dtSec * 1000 * s.speedMultiplier;
+      const rawNextUtc = s.timeUtc + dtSec * 1000 * s.speedMultiplier;
+      const nextUtc =
+        s.eclipseReplay?.active && s.speedMultiplier > 0
+          ? Math.min(rawNextUtc, s.eclipseReplay.endUtcMs)
+          : rawNextUtc;
       this.state.setTimeUtc(nextUtc, false);
     }
 

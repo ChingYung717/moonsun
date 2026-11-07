@@ -1,6 +1,6 @@
 import * as Astronomy from 'astronomy-engine';
 import { AppState, MAX_VALID_UTC_MS, MIN_VALID_UTC_MS } from '../state/AppState';
-import { SimulationClock } from '../time/Clock';
+import { SimulationClock, togglePlayPause } from '../time/Clock';
 import {
   formatDateTime,
   GREGORIAN_REFORM_MS,
@@ -401,8 +401,7 @@ export class TimePanel {
 
     const playBtn = this.el.querySelector<HTMLButtonElement>('#btn-play-toggle')!;
     playBtn.addEventListener('click', () => {
-      const s = this.state.get();
-      this.state.update({ playing: !s.playing, isRealtimeSync: false, eclipseReplay: null });
+      togglePlayPause(this.state);
     });
 
     const speedSel = this.el.querySelector<HTMLSelectElement>('#speed-select')!;
@@ -426,6 +425,7 @@ export class TimePanel {
 
   public refreshDisplay(): void {
     const s = this.state.get();
+    if (s.uiHidden) return;
     const tz = s.earthObserver.timezone;
     const parts = utcToLocalParts(s.timeUtc, tz);
 

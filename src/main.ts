@@ -5,7 +5,7 @@ import {
   shouldExposeDebugHandle,
   syncBrowserUrlNow,
 } from './state/AppState';
-import { FrameRunner, SimulationClock } from './time/Clock';
+import { FrameRunner, SimulationClock, handleGlobalKeydown } from './time/Clock';
 import { MasterRenderer } from './render/Renderer';
 import { TopBar } from './ui/TopBar';
 import { TimePanel } from './ui/TimePanel';
@@ -182,9 +182,6 @@ function bootstrap(): void {
       uiRoot.classList.toggle('ui-hidden', s.uiHidden);
       if (!s.uiHidden) {
         lastUiRefresh = -Infinity;
-        timePanel.refreshDisplay();
-        timeline.refreshDisplay();
-        eclipsePanel.refreshReplayProgress();
       }
     }
     if (changed.has('uiMode')) {
@@ -194,44 +191,15 @@ function bootstrap(): void {
 
   // Global keyboard shortcuts
   window.addEventListener('keydown', (e) => {
-    if (
-      document.activeElement instanceof HTMLInputElement ||
-      document.activeElement instanceof HTMLSelectElement ||
-      document.activeElement instanceof HTMLTextAreaElement
-    ) {
-      return;
-    }
-    if (e.code === 'Space') {
-      e.preventDefault();
-      const s = state.get();
-      state.update({ playing: !s.playing, isRealtimeSync: false });
-    } else if (e.key === 'h' || e.key === 'H') {
-      state.update({ uiHidden: !state.get().uiHidden });
-    } else if (e.key === 'n' || e.key === 'N') {
-      clock.resetToNow();
-      showToast('已同步至当前真实时间');
-    } else if (e.key === '1') {
-      state.update({ viewMode: 'space' });
-    } else if (e.key === '2') {
-      state.update({ viewMode: 'ground' });
-    } else if (e.key === '3') {
-      state.update({ viewMode: 'moon' });
-    } else if (e.key === 'ArrowRight') {
-      clock.stepByMs(e.shiftKey ? 86400000 : 60000);
-    } else if (e.key === 'ArrowLeft') {
-      clock.stepByMs(e.shiftKey ? -86400000 : -60000);
-    } else if (e.key === '?' || (e.shiftKey && e.code === 'Slash')) {
-      e.preventDefault();
-      helpCenter.toggle();
-    } else if (e.key === 'Backspace') {
-      if (state.canUndo()) {
-        e.preventDefault();
-        const snap = state.undoLastJump();
-        if (snap) {
-          showToast(`已恢复至「${snap.label}」之前的状态（${snap.earthObserver.name}）`);
-        }
-      }
-    }
+    handleGlobalKeydown(e, {
+      state,
+      clock,
+      activeElement: document.activeElement,
+      onToggleHelp: () => helpCenter.toggle(),
+      onNotifyResetToNow: () => showToast('已同步至当前真实时间'),
+      onNotifyUndo: (snap) =>
+        showToast(`已恢复至「${snap.label}」之前的状态（${snap.earthObserver.name}）`),
+    });
   });
 
   const frameRunner = new FrameRunner(

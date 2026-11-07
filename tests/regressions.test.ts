@@ -793,17 +793,25 @@ describe('Round-1 regressions', () => {
     }
   });
 
-  it('decouples eclipse replay speed transitions and auto-stop from uiHidden and UI throttling (F1)', async () => {
+  it('decouples eclipse replay speed transitions and auto-stop from uiHidden and UI throttling, and handles Space/play-buttons/scrubber & zero TopBar DOM writes while hidden (F1)', async () => {
+    const { vi } = await import('vitest');
     const { AppState } = await import('../src/state/AppState');
-    const { SimulationClock, FrameRunner, computeEclipseReplayMetrics } = await import(
-      '../src/time/Clock'
-    );
+    const {
+      SimulationClock,
+      FrameRunner,
+      computeEclipseReplayMetrics,
+      handleGlobalKeydown,
+      togglePlayPause,
+    } = await import('../src/time/Clock');
+    const { EclipsePanel } = await import('../src/ui/EclipsePanel');
+    const { TopBar } = await import('../src/ui/TopBar');
+    const { TimePanel } = await import('../src/ui/TimePanel');
 
     const startUtc = Date.UTC(2024, 3, 8, 17, 0, 0);
     const peakUtc = Date.UTC(2024, 3, 8, 18, 18, 0);
     const endUtc = Date.UTC(2024, 3, 8, 19, 36, 0);
 
-    // Replay without u2/u3 uses ±5min peak window
+    // 1. Replay without u2/u3 uses ±5min peak window, clamps exactly to endUtc, and cleans up on resume
     const runWithUiFlag = (uiHidden: boolean) => {
       const st = new AppState({
         timeUtc: startUtc,
@@ -838,28 +846,34 @@ describe('Round-1 regressions', () => {
       runner.runFrame(1100);
       expect(st.get().speedMultiplier).toBe(fastSpeed);
 
-      // Cross endUtc -> immediately pauses and marks active=false even when uiHidden=true
+      // Cross endUtc -> immediately pauses, clamps timeUtc to endUtc, and marks active=false even when uiHidden=true
       st.setTimeUtc(endUtc - 1000, false, true);
       runner.runFrame(1200);
-      expect(st.get().playing).toBe(false);
-      expect(st.get().eclipseReplay?.active).toBe(false);
-      expect(computeEclipseReplayMetrics(st.get().timeUtc, st.get().eclipseReplay!).badgeText).toBe(
+      const endedTimeUtc = st.get().timeUtc;
+      const endedPlaying = st.get().playing;
+      const endedActive = st.get().eclipseReplay?.active;
+      expect(endedTimeUtc).toBe(endUtc);
+      expect(endedPlaying).toBe(false);
+      expect(endedActive).toBe(false);
+      expect(computeEclipseReplayMetrics(endedTimeUtc, st.get().eclipseReplay!).badgeText).toBe(
         '✅ 已复圆结束'
       );
 
-      // Resuming playback (e.g. pressing Space) after replay completion advances timeUtc normally without re-stopping
-      const endedUtc = st.get().timeUtc;
-      st.update({ playing: true, isRealtimeSync: false });
+      // Resuming playback (e.g. pressing Space via togglePlayPause) after replay completion clears eclipseReplay, restores 1x speed, and advances timeUtc normally
+      togglePlayPause(st);
+      expect(st.get().playing).toBe(true);
+      expect(st.get().eclipseReplay).toBeNull();
+      expect(st.get().speedMultiplier).toBe(1);
       runner.runFrame(1300);
       expect(st.get().playing).toBe(true);
-      expect(st.get().timeUtc).toBeGreaterThan(endedUtc);
+      expect(st.get().timeUtc).toBeGreaterThan(endedTimeUtc);
 
-      return { fastSpeed, slowSpeed, endedPlaying: false, endedActive: st.get().eclipseReplay?.active };
+      return { fastSpeed, slowSpeed, endedTimeUtc, endedPlaying, endedActive };
     };
 
     expect(runWithUiFlag(true)).toEqual(runWithUiFlag(false));
 
-    // Injecting an active replay while isRealtimeSync=true and speedMultiplier=1 exits realtime sync and applies replay speed on first tick
+    // 2. Injecting an active replay while isRealtimeSync=true and speedMultiplier=1 exits realtime sync and applies replay speed on first tick
     const stInjected = new AppState({
       timeUtc: startUtc,
       playing: true,
@@ -879,6 +893,396 @@ describe('Round-1 regressions', () => {
     expect(stInjected.get().speedMultiplier).toBe(195);
     expect(stInjected.get().timeUtc).toBeGreaterThanOrEqual(startUtc);
     expect(stInjected.get().timeUtc).toBeLessThan(endUtc);
+
+    // 3. UI interaction & DOM mutation verification for #replay-scrubber, Space keydown, #top-play-btn, #btn-play-toggle, and TopBar under uiHidden
+    class TrackedMockEl {
+      public tagName = 'DIV';
+      public type = '';
+      public options: Array<{ value: string }> = [
+        { value: '1' },
+        { value: '60' },
+        { value: '3600' },
+        { value: '86400' },
+        { value: '2548800' },
+      ];
+      public dataset: Record<string, string> = {};
+      public checked = false;
+      public children: TrackedMockEl[] = [];
+      public firstElementChild: TrackedMockEl | null = null;
+      public parent: TrackedMockEl | null = null;
+      private _innerHTML = '';
+      private _textContent = '';
+      private _className = '';
+      private _value = '';
+      private listeners = new Map<string, Array<(e?: unknown) => void>>();
+      private childrenMap = new Map<string, TrackedMockEl>();
+      public style: Record<string, string>;
+      public classList: {
+        add: (...cls: string[]) => void;
+        remove: (...cls: string[]) => void;
+        toggle: (cls: string, force?: boolean) => void;
+      };
+
+      constructor(
+        public id = '',
+        private onMutate?: () => void
+      ) {
+        if (id === '#ecl-cat-filter') this._value = 'all';
+        if (id === '#ecl-sort') this._value = 'score';
+        if (id === '#replay-scrubber' || id === '#body-scale-range' || id === '#fov-range') {
+          this.tagName = 'INPUT';
+          this.type = 'range';
+        } else if (id === '#ecl-query' || id === '#in-year') {
+          this.tagName = 'INPUT';
+          this.type = 'text';
+        } else if (id.includes('select')) {
+          this.tagName = 'SELECT';
+        }
+        const notify = () => this.onMutate?.();
+        this.style = new Proxy({} as Record<string, string>, {
+          set(target, prop: string, val: string) {
+            target[prop] = val;
+            notify();
+            return true;
+          },
+        });
+        this.classList = {
+          add: () => notify(),
+          remove: () => notify(),
+          toggle: () => notify(),
+        };
+      }
+
+      get innerHTML(): string {
+        return this._innerHTML;
+      }
+      set innerHTML(v: string) {
+        this._innerHTML = v;
+        this.onMutate?.();
+      }
+      get textContent(): string {
+        return this._textContent;
+      }
+      set textContent(v: string) {
+        this._textContent = v;
+        this.onMutate?.();
+      }
+      get className(): string {
+        return this._className;
+      }
+      set className(v: string) {
+        this._className = v;
+        this.onMutate?.();
+      }
+      get value(): string {
+        return this._value;
+      }
+      set value(v: string) {
+        this._value = v;
+        this.onMutate?.();
+      }
+
+      setAttribute(): void {
+        this.onMutate?.();
+      }
+      appendChild(child: TrackedMockEl): TrackedMockEl {
+        child.parent = this;
+        this.children.push(child);
+        this.firstElementChild = this.children[0] ?? null;
+        this.onMutate?.();
+        return child;
+      }
+      append(...nodes: Array<TrackedMockEl | string>): void {
+        for (const n of nodes) {
+          if (typeof n === 'string') {
+            this._textContent += n;
+          } else {
+            this.appendChild(n);
+          }
+        }
+        this.onMutate?.();
+      }
+      contains(node: TrackedMockEl): boolean {
+        return this.children.includes(node);
+      }
+      addEventListener(type: string, cb: (e?: unknown) => void): void {
+        const list = this.listeners.get(type) ?? [];
+        list.push(cb);
+        this.listeners.set(type, list);
+      }
+      trigger(type: string, ev?: unknown): void {
+        for (const cb of this.listeners.get(type) ?? []) cb(ev);
+      }
+      querySelector(sel: string): TrackedMockEl {
+        if (!this.childrenMap.has(sel)) {
+          this.childrenMap.set(sel, new TrackedMockEl(sel, this.onMutate));
+        }
+        return this.childrenMap.get(sel)!;
+      }
+      querySelectorAll(sel: string): TrackedMockEl[] {
+        if (sel === '[data-view]') {
+          if (!this.childrenMap.has('__views')) {
+            const b1 = new TrackedMockEl('view-space', this.onMutate);
+            b1.dataset.view = 'space';
+            const b2 = new TrackedMockEl('view-ground', this.onMutate);
+            b2.dataset.view = 'ground';
+            this.childrenMap.set('__views', b1);
+            this.childrenMap.set('__views2', b2);
+          }
+          return [this.childrenMap.get('__views')!, this.childrenMap.get('__views2')!];
+        }
+        if (sel === '[data-scale]') {
+          if (!this.childrenMap.has('__scales')) {
+            const s1 = new TrackedMockEl('scale-sch', this.onMutate);
+            s1.dataset.scale = 'schematic';
+            this.childrenMap.set('__scales', s1);
+          }
+          return [this.childrenMap.get('__scales')!];
+        }
+        return [];
+      }
+      remove(): void {}
+    }
+
+    const prevDoc = (globalThis as Record<string, unknown>).document;
+    const prevWin = (globalThis as Record<string, unknown>).window;
+    let topBarDomMutations = 0;
+    let createCount = 0;
+    const mockDoc: {
+      activeElement: TrackedMockEl | null;
+      body: TrackedMockEl;
+      createElement: (tag: string) => TrackedMockEl;
+    } = {
+      activeElement: null,
+      body: new TrackedMockEl('body'),
+      createElement: (tag: string) => {
+        createCount++;
+        // Track mutations on TopBar root and all its queried children
+        const isTopBar = tag === 'header';
+        const el = new TrackedMockEl(
+          `${tag}-${createCount}`,
+          isTopBar ? () => topBarDomMutations++ : undefined
+        );
+        el.tagName = tag.toUpperCase();
+        return el;
+      },
+    };
+    const winListeners = new Map<string, Array<(e: unknown) => void>>();
+    const mockWin = {
+      innerWidth: 1280,
+      innerHeight: 800,
+      setTimeout: () => 1,
+      clearTimeout: () => {},
+      addEventListener: (type: string, cb: (e: unknown) => void) => {
+        const list = winListeners.get(type) ?? [];
+        list.push(cb);
+        winListeners.set(type, list);
+      },
+      dispatchKeydown: (ev: {
+        code: string;
+        key: string;
+        shiftKey?: boolean;
+        target?: TrackedMockEl | null;
+      }) => {
+        let prevented = false;
+        const eventObj = {
+          code: ev.code,
+          key: ev.key,
+          shiftKey: Boolean(ev.shiftKey),
+          get defaultPrevented() {
+            return prevented;
+          },
+          preventDefault() {
+            prevented = true;
+          },
+        };
+        if (ev.target) {
+          ev.target.trigger('keydown', eventObj);
+        }
+        for (const cb of winListeners.get('keydown') ?? []) {
+          cb(eventObj);
+        }
+      },
+    };
+
+    (globalThis as Record<string, unknown>).document = mockDoc;
+    (globalThis as Record<string, unknown>).window = mockWin;
+
+    try {
+      const state = new AppState();
+      const clock = new SimulationClock(state);
+      let currentGroundLock: 'free' | 'sun' | 'moon' = 'sun';
+      let currentMoonLock: 'earth' | 'sun' | 'free' = 'earth';
+      let groundLockCb: (() => void) | null = null;
+      const mockRenderer = {
+        groundView: {
+          get lockTarget() {
+            return currentGroundLock;
+          },
+          setLockTarget: (t: 'free' | 'sun' | 'moon') => {
+            currentGroundLock = t;
+            state.update({ groundLockTarget: t });
+            groundLockCb?.();
+          },
+          autoAimOnEnter: () => {},
+          onLockChange: (cb: () => void) => {
+            groundLockCb = cb;
+          },
+        },
+        moonSurfaceView: {
+          get lockTarget() {
+            return currentMoonLock;
+          },
+          setLockTarget: (t: 'earth' | 'sun' | 'free') => {
+            currentMoonLock = t;
+            state.update({ moonLockTarget: t });
+          },
+          onLockChange: () => {},
+        },
+        spaceView: { setHudVisible: () => {} },
+      } as unknown as ConstructorParameters<typeof EclipsePanel>[1];
+
+      const topBar = new TopBar(state, mockRenderer, clock);
+      const timePanel = new TimePanel(state, clock);
+      const eclipsePanel = new EclipsePanel(state, mockRenderer);
+
+      mockWin.addEventListener('keydown', (e) => {
+        handleGlobalKeydown(e as Parameters<typeof handleGlobalKeydown>[0], {
+          state,
+          clock,
+          activeElement: mockDoc.activeElement,
+        });
+      });
+
+      const e2024 = CURATED_ECLIPSE_CATALOG.find((x) => x.id === 'solar-2024-04-08')!;
+      eclipsePanel.selectEclipseEvent(e2024, 'ground');
+      const cardEl = eclipsePanel.floatingCardEl as unknown as TrackedMockEl;
+      const replayBtn = cardEl.querySelector('#act-replay-ecl');
+      const scrubber = cardEl.querySelector('#replay-scrubber');
+      const badge = cardEl.querySelector('#replay-phase-badge');
+      const progWrap = cardEl.querySelector('#replay-progress-wrap');
+      const topPlayBtn = (topBar.el as unknown as TrackedMockEl).querySelector('#top-play-btn');
+      const panelPlayBtn = (timePanel.el as unknown as TrackedMockEl).querySelector(
+        '#btn-play-toggle'
+      );
+
+      // Start 60s replay
+      replayBtn.trigger('click');
+      expect(state.get().playing).toBe(true);
+      expect(state.get().eclipseReplay?.active).toBe(true);
+      expect(badge.textContent).toContain('⏩ 偏食阶段快进');
+
+      // 3a. Drag #replay-scrubber to 500 (totality) -> focus remains on #replay-scrubber (<input type="range">)
+      mockDoc.activeElement = scrubber;
+      scrubber.value = '500';
+      scrubber.trigger('input');
+      expect(state.get().playing).toBe(true);
+      expect(state.get().eclipseReplay?.active).toBe(true);
+      expect(badge.textContent).toContain('🔥 食既~生光自动慢放');
+      expect(badge.textContent).not.toContain('⏸ 已暂停');
+
+      // Pressing Space while focus is on #replay-scrubber pauses replay, keeps eclipseReplay active, and shows paused badge!
+      mockWin.dispatchKeydown({ code: 'Space', key: ' ', target: scrubber });
+      expect(state.get().playing).toBe(false);
+      expect(state.get().eclipseReplay?.active).toBe(true);
+      expect(badge.textContent).toContain('⏸ 已暂停 · 🔥 食既~生光自动慢放');
+
+      // Pressing Space again on window while focus is still on #replay-scrubber resumes replay!
+      mockWin.dispatchKeydown({ code: 'Space', key: ' ' });
+      expect(state.get().playing).toBe(true);
+      expect(state.get().eclipseReplay?.active).toBe(true);
+      expect(badge.textContent).toContain('🔥 食既~生光自动慢放');
+      expect(badge.textContent).not.toContain('⏸ 已暂停');
+
+      // By contrast, when focus is on a text input (#ecl-query), Space does NOT toggle playback
+      const queryInput = (eclipsePanel.el as unknown as TrackedMockEl).querySelector('#ecl-query');
+      mockDoc.activeElement = queryInput;
+      mockWin.dispatchKeydown({ code: 'Space', key: ' ' });
+      expect(state.get().playing).toBe(true);
+      mockDoc.activeElement = scrubber;
+
+      // 3b. Clicking #top-play-btn and #btn-play-toggle pauses/resumes replay WITHOUT clearing eclipseReplay
+      topPlayBtn.trigger('click');
+      expect(state.get().playing).toBe(false);
+      expect(state.get().eclipseReplay?.active).toBe(true);
+      expect(badge.textContent).toContain('⏸ 已暂停');
+
+      panelPlayBtn.trigger('click');
+      expect(state.get().playing).toBe(true);
+      expect(state.get().eclipseReplay?.active).toBe(true);
+      expect(badge.textContent).not.toContain('⏸ 已暂停');
+
+      // 3c. Verify TopBar & panels perform 0 DOM writes while uiHidden=true, and sync exactly once when unhidden
+      const topBarSpy = vi.spyOn(topBar, 'syncActiveButtons');
+      const timePanelSpy = vi.spyOn(timePanel, 'refreshDisplay');
+      const eclipseReplaySpy = vi.spyOn(eclipsePanel, 'refreshReplayProgress');
+
+      state.update({ uiHidden: true });
+      topBarSpy.mockClear();
+      timePanelSpy.mockClear();
+      eclipseReplaySpy.mockClear();
+      topBarDomMutations = 0;
+
+      const rep = state.get().eclipseReplay!;
+      const runner = new FrameRunner(state, clock, () => {});
+      clock.tick(5000);
+      state.setTimeUtc(rep.u2UtcMs! - 20_000, false, true);
+      runner.runFrame(5050);
+      state.setTimeUtc(rep.u3UtcMs! + 120_000, false, true);
+      runner.runFrame(5100);
+      state.setTimeUtc(rep.endUtcMs - 500, false, true);
+      runner.runFrame(5200);
+      mockRenderer.groundView.setLockTarget('sun');
+
+      // Replay finished at exact endUtcMs while uiHidden=true with ZERO DOM mutations on TopBar
+      expect(state.get().timeUtc).toBe(rep.endUtcMs);
+      expect(state.get().playing).toBe(false);
+      expect(state.get().eclipseReplay?.active).toBe(false);
+      expect(topBarSpy).toHaveBeenCalledTimes(0);
+      expect(topBarDomMutations).toBe(0);
+      expect(timePanelSpy).toHaveBeenCalledTimes(0);
+      expect(eclipseReplaySpy).toHaveBeenCalledTimes(0);
+
+      // Unhiding UI triggers exactly 1 sync per subscriber (no duplicate refreshes)
+      state.update({ uiHidden: false });
+      expect(topBarSpy).toHaveBeenCalledTimes(1);
+      expect(timePanelSpy).toHaveBeenCalledTimes(1);
+      expect(eclipseReplaySpy).toHaveBeenCalledTimes(1);
+      expect(badge.textContent).toBe('✅ 已复圆结束');
+      expect(scrubber.value).toBe('1000');
+
+      // 3d. After natural completion, scrubbing back to 250 (< endUtcMs) reactivates replay in paused state, and clicking #top-play-btn resumes it
+      scrubber.value = '250';
+      scrubber.trigger('input');
+      expect(state.get().eclipseReplay?.active).toBe(true);
+      expect(state.get().playing).toBe(false);
+      expect(badge.textContent).toContain('⏸ 已暂停 · ⏩ 偏食阶段快进');
+
+      topPlayBtn.trigger('click');
+      expect(state.get().playing).toBe(true);
+      expect(state.get().eclipseReplay?.active).toBe(true);
+      expect(badge.textContent).toContain('⏩ 偏食阶段快进');
+      expect(badge.textContent).not.toContain('⏸ 已暂停');
+
+      // 3e. Let replay reach natural end again; pressing Space (or #btn-play-toggle) without scrubbing back clears eclipseReplay and restores 1x speed
+      const rep2 = state.get().eclipseReplay!;
+      state.setTimeUtc(rep2.endUtcMs - 200, false, true);
+      runner.runFrame(5300);
+      expect(state.get().timeUtc).toBe(rep2.endUtcMs);
+      expect(state.get().playing).toBe(false);
+      expect(state.get().eclipseReplay?.active).toBe(false);
+      expect(badge.textContent).toBe('✅ 已复圆结束');
+
+      mockWin.dispatchKeydown({ code: 'Space', key: ' ', target: scrubber });
+      expect(state.get().playing).toBe(true);
+      expect(state.get().eclipseReplay).toBeNull();
+      expect(state.get().speedMultiplier).toBe(1);
+      expect(progWrap.style.display).toBe('none');
+      expect(badge.textContent).toBe('');
+    } finally {
+      (globalThis as Record<string, unknown>).document = prevDoc;
+      (globalThis as Record<string, unknown>).window = prevWin;
+    }
   });
 });
 

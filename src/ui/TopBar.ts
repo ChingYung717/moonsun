@@ -8,7 +8,7 @@ import {
 } from '../state/AppState';
 import { getCuratedCatalogStats } from '../astro/eclipses/catalog';
 import { MasterRenderer } from '../render/Renderer';
-import { SimulationClock } from '../time/Clock';
+import { SimulationClock, togglePlayPause } from '../time/Clock';
 import { computeEarthObserverSky } from '../astro/observer';
 import { showToast } from './Toast';
 import { termTipHtml } from './tooltips';
@@ -16,6 +16,7 @@ import { termTipHtml } from './tooltips';
 export class TopBar {
   public readonly el: HTMLElement;
   private onOpenHelpCallback: (() => void) | null = null;
+  private lastCanUndo = false;
 
   constructor(
     private state: AppState,
@@ -41,10 +42,35 @@ export class TopBar {
           this.renderer.groundView.autoAimOnEnter(sky);
         }
       }
-      this.syncActiveButtons();
+      if (s.uiHidden) return;
+      const canUndoNow = this.state.canUndo();
+      if (
+        canUndoNow !== this.lastCanUndo ||
+        changed.has('uiHidden') ||
+        changed.has('uiMode') ||
+        changed.has('viewMode') ||
+        changed.has('scaleMode') ||
+        changed.has('playing') ||
+        changed.has('speedMultiplier') ||
+        changed.has('spaceCameraPreset') ||
+        changed.has('groundBodyScale') ||
+        changed.has('groundFov') ||
+        changed.has('groundLockTarget') ||
+        changed.has('moonLockTarget')
+      ) {
+        this.syncActiveButtons();
+      }
     });
-    this.renderer.groundView.onLockChange(() => this.syncActiveButtons());
-    this.renderer.moonSurfaceView.onLockChange(() => this.syncActiveButtons());
+    this.renderer.groundView.onLockChange(() => {
+      if (!this.state.get().uiHidden) {
+        this.syncActiveButtons();
+      }
+    });
+    this.renderer.moonSurfaceView.onLockChange(() => {
+      if (!this.state.get().uiHidden) {
+        this.syncActiveButtons();
+      }
+    });
   }
 
   public onOpenHelp(cb: () => void): void {
@@ -158,12 +184,7 @@ export class TopBar {
     });
 
     this.el.querySelector('#top-play-btn')?.addEventListener('click', () => {
-      const s = this.state.get();
-      this.state.update({
-        playing: !s.playing,
-        isRealtimeSync: false,
-        eclipseReplay: null,
-      });
+      togglePlayPause(this.state);
     });
 
     const topSpeedSel = this.el.querySelector<HTMLSelectElement>('#top-speed-select')!;
@@ -289,7 +310,10 @@ export class TopBar {
 
   public syncActiveButtons(): void {
     const s = this.state.get();
+    if (s.uiHidden) return;
     const isPro = s.uiMode === 'pro';
+    const canUndo = this.state.canUndo();
+    this.lastCanUndo = canUndo;
 
     this.el.querySelectorAll<HTMLButtonElement>('[data-view]').forEach((btn) => {
       btn.classList.toggle('active', btn.dataset.view === s.viewMode);
@@ -305,12 +329,12 @@ export class TopBar {
 
     const topSpeedSel = this.el.querySelector<HTMLSelectElement>('#top-speed-select')!;
     const speedStr = String(s.speedMultiplier);
-    if (Array.from(topSpeedSel.options).some((o) => o.value === speedStr)) {
+    if (Array.from(topSpeedSel.options ?? []).some((o) => o.value === speedStr)) {
       topSpeedSel.value = speedStr;
     }
 
     const undoBtn = this.el.querySelector<HTMLButtonElement>('#top-undo-btn')!;
-    undoBtn.style.display = this.state.canUndo() ? 'inline-flex' : 'none';
+    undoBtn.style.display = canUndo ? 'inline-flex' : 'none';
 
     const uiModeBtn = this.el.querySelector<HTMLButtonElement>('#ui-mode-btn')!;
     uiModeBtn.textContent = isPro ? '🎛 专业模式 (已开)' : '🎛 专业模式';

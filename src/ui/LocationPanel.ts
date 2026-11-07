@@ -9,8 +9,14 @@ export class LocationPanel {
     this.el = document.createElement('section');
     this.el.className = 'side-panel glass-panel';
     this.render();
-    this.state.subscribe((_, changed) => {
-      if (changed.has('earthObserver') || changed.has('moonObserver') || changed.has('viewMode')) {
+    this.state.subscribe((s, changed) => {
+      if (s.uiHidden) return;
+      if (
+        changed.has('uiHidden') ||
+        changed.has('earthObserver') ||
+        changed.has('moonObserver') ||
+        changed.has('viewMode')
+      ) {
         this.syncUI();
       }
     });

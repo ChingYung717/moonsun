@@ -13,7 +13,11 @@ import {
   searchUpcomingLocalSolarEclipses,
 } from '../astro/eclipses/search';
 import { makeAstroTime } from '../astro/ephemeris';
-import { computeEclipseReplayMetrics, syncEclipseReplayState } from '../time/Clock';
+import {
+  computeEclipseReplayMetrics,
+  syncEclipseReplayState,
+  togglePlayPause,
+} from '../time/Clock';
 import { formatDateTime, formatTimeShort, inferTimezone, utcToLocalParts } from '../time/tz';
 import { MasterRenderer } from '../render/Renderer';
 import { showToast } from './Toast';
@@ -612,7 +616,7 @@ export class EclipsePanel {
   ): void {
     this.state.pushUndoSnapshot('选择天象');
     this.selectedEvent = item;
-    this.isFloatingCardOpen = true;
+    this.isFloatingCardOpen = false;
 
     let effectivePeakUtc = item.peakUtcMs;
     if (item.kind === 'solar') {
@@ -671,6 +675,7 @@ export class EclipsePanel {
       this.renderer.moonSurfaceView.setLockTarget('earth');
     }
 
+    this.isFloatingCardOpen = true;
     this.renderFloatingCard(item);
     this.onEventSelectedCallback?.();
     showToast({
@@ -696,7 +701,7 @@ export class EclipsePanel {
     }
   ): void {
     this.selectedEvent = item;
-    this.isFloatingCardOpen = true;
+    this.isFloatingCardOpen = false;
 
     let effectivePeakUtc = item.peakUtcMs;
     if (!opts.hasTime && item.kind === 'solar') {
@@ -760,6 +765,7 @@ export class EclipsePanel {
       this.renderer.moonSurfaceView.setLockTarget('earth');
     }
 
+    this.isFloatingCardOpen = true;
     this.renderFloatingCard(item);
   }
 
@@ -923,21 +929,42 @@ export class EclipsePanel {
     });
 
     const scrubber = this.floatingCardEl.querySelector<HTMLInputElement>('#replay-scrubber');
+    if (scrubber && !scrubber.type) {
+      scrubber.type = 'range';
+    }
+    scrubber?.addEventListener('keydown', (e) => {
+      const ke = e as KeyboardEvent;
+      if ((ke.code === 'Space' || ke.key === ' ') && !ke.defaultPrevented) {
+        ke.preventDefault?.();
+        togglePlayPause(this.state);
+      }
+    });
     scrubber?.addEventListener('input', () => {
-      const rep = this.state.get().eclipseReplay;
+      const s = this.state.get();
+      const rep = s.eclipseReplay;
       if (!rep) return;
       const frac = Math.max(0, Math.min(1, parseFloat(scrubber.value) / 1000));
       const targetUtc = rep.startUtcMs + (rep.endUtcMs - rep.startUtcMs) * frac;
       const shouldBeActive = targetUtc < rep.endUtcMs;
       const updatedRep = rep.active === shouldBeActive ? rep : { ...rep, active: shouldBeActive };
-      const metrics = computeEclipseReplayMetrics(targetUtc, updatedRep);
+      const nextPlaying = shouldBeActive ? s.playing : false;
+      const metrics = computeEclipseReplayMetrics(targetUtc, updatedRep, nextPlaying);
+      const prevRep = s.eclipseReplay;
+      const prevSpeed = s.speedMultiplier;
+      const prevPlaying = s.playing;
       this.state.setTimeUtc(targetUtc, true, true);
       this.state.update({
         eclipseReplay: updatedRep,
         speedMultiplier: metrics.desiredSpeed,
         ...(shouldBeActive ? {} : { playing: false }),
       });
-      this.refreshReplayProgress();
+      if (
+        updatedRep === prevRep &&
+        metrics.desiredSpeed === prevSpeed &&
+        nextPlaying === prevPlaying
+      ) {
+        this.refreshReplayProgress();
+      }
     });
 
     if (this.state.get().eclipseReplay) {
@@ -966,7 +993,7 @@ export class EclipsePanel {
 
     if (progWrap) progWrap.style.display = 'block';
 
-    const metrics = computeEclipseReplayMetrics(s.timeUtc, rep);
+    const metrics = computeEclipseReplayMetrics(s.timeUtc, rep, s.playing);
     if (scrubber) {
       scrubber.value = String(Math.round(metrics.frac * 1000));
     }
