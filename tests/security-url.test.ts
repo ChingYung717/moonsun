@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
 import {
@@ -6,12 +6,19 @@ import {
   buildShareSearchParams,
   escapeHtml,
   parseUrlInitialState,
+  shouldExposeDebugHandle,
 } from '../src/state/AppState';
 import { CURATED_ECLIPSE_CATALOG } from '../src/astro/eclipses/catalog';
+import * as eclipseSearch from '../src/astro/eclipses/search';
+import { computeEphemeris } from '../src/astro/ephemeris';
+import { computeMoonPhase } from '../src/astro/phase';
+import { computeEarthObserverSky, computeMoonSurfaceSky } from '../src/astro/observer';
 import { EclipsePanel } from '../src/ui/EclipsePanel';
+import { InfoHUD } from '../src/ui/InfoHUD';
+import { LocationPanel } from '../src/ui/LocationPanel';
 import { SpaceView } from '../src/render/views/SpaceView';
 
-describe('Security & URL State Serialization Regressions (B3)', () => {
+describe('Security & URL State Serialization Regressions (B3 / MS-03 / MS-04 / MS-11)', () => {
   it('escapeHtml escapes all 5 HTML special characters and neutralizes XSS payloads', () => {
     const raw = `<img src=x onerror="window.__xss=1">'&<>`;
     const escaped = escapeHtml(raw);
@@ -20,6 +27,26 @@ describe('Security & URL State Serialization Regressions (B3)', () => {
     );
     expect(escaped).not.toContain('<');
     expect(escaped).not.toContain('>');
+  });
+
+  it('shouldExposeDebugHandle strictly requires explicit truthy debug=1/true or audit=1/true in production (MS-04)', () => {
+    // Production mode (isDev = false)
+    expect(shouldExposeDebugHandle('', false)).toBe(false);
+    expect(shouldExposeDebugHandle('?debug=0', false)).toBe(false);
+    expect(shouldExposeDebugHandle('?debug=false', false)).toBe(false);
+    expect(shouldExposeDebugHandle('?audit=0', false)).toBe(false);
+    expect(shouldExposeDebugHandle('?audit=false', false)).toBe(false);
+    expect(shouldExposeDebugHandle('?debug=&audit=', false)).toBe(false);
+    expect(shouldExposeDebugHandle('?debug=no&audit=off', false)).toBe(false);
+    expect(shouldExposeDebugHandle('?debug=1', false)).toBe(true);
+    expect(shouldExposeDebugHandle('?debug=true', false)).toBe(true);
+    expect(shouldExposeDebugHandle('?audit=1', false)).toBe(true);
+    expect(shouldExposeDebugHandle('?audit=TRUE', false)).toBe(true);
+
+    // Development mode (isDev = true)
+    expect(shouldExposeDebugHandle('', true)).toBe(true);
+    expect(shouldExposeDebugHandle('?debug=0', true)).toBe(false);
+    expect(shouldExposeDebugHandle('?debug=false', true)).toBe(false);
   });
 
   it('parseUrlInitialState rejects out-of-range lat/lon, invalid dates, and unknown enums', () => {
@@ -68,20 +95,28 @@ describe('Security & URL State Serialization Regressions (B3)', () => {
     expect(serialized.get('scale')).toBe('realistic');
   });
 
-  it('static scan: no innerHTML template in src/ interpolates unescaped observer names or siteLabel', () => {
-    const uiDir = path.resolve(__dirname, '../src/ui');
-    const files = fs.readdirSync(uiDir).filter((f) => f.endsWith('.ts'));
-    for (const file of files) {
-      const content = fs.readFileSync(path.join(uiDir, file), 'utf8');
-      const blocks = content.match(/innerHTML\s*=\s*`[\s\S]*?`;/g) ?? [];
-      for (const block of blocks) {
-        expect(block).not.toMatch(/\$\{\s*(?:this\.)?s(?:tate\.get\(\))?\.(?:earth|moon)Observer\.name\s*\}/);
-        expect(block).not.toMatch(/\$\{\s*siteLabel\s*\}/);
+  it('static scan: no innerHTML template in src/ui/ or src/render/views/ interpolates unescaped observer names, siteLabel, or featuredSiteName (MS-04 / MS-11)', () => {
+    const scanDirs = [
+      path.resolve(__dirname, '../src/ui'),
+      path.resolve(__dirname, '../src/render/views'),
+    ];
+    for (const dir of scanDirs) {
+      const files = fs.readdirSync(dir).filter((f) => f.endsWith('.ts'));
+      for (const file of files) {
+        const content = fs.readFileSync(path.join(dir, file), 'utf8');
+        const blocks = content.match(/innerHTML\s*=\s*`[\s\S]*?`;/g) ?? [];
+        for (const block of blocks) {
+          expect(block).not.toMatch(
+            /\$\{\s*(?:this\.)?s(?:tate\.get\(\))?\.(?:earth|moon)Observer\.name\s*\}/
+          );
+          expect(block).not.toMatch(/\$\{\s*siteLabel\s*\}/);
+          expect(block).not.toMatch(/\$\{\s*item\.featuredSiteName\s*\}/);
+        }
       }
     }
   });
 
-  it('syncs EclipsePanel floating card & contacts on undo (Backspace) and syncs fallback observer & timezone on replay', () => {
+  it('syncs EclipsePanel floating card & contacts on undo (Backspace), validates extreme year inputs & error feedback (MS-03), and escapes XSS payloads across UI & views (MS-04 / MS-11)', () => {
     class MockEl {
       public innerHTML = '';
       public textContent = '';
@@ -114,8 +149,15 @@ describe('Security & URL State Serialization Regressions (B3)', () => {
         this.firstElementChild = this.children[0] ?? null;
         return child;
       }
-      append(...nodes: MockEl[]): void {
-        for (const n of nodes) this.appendChild(n);
+      append(...nodes: Array<MockEl | string>): void {
+        for (const n of nodes) {
+          if (typeof n === 'string') {
+            this.textContent += n;
+          } else {
+            this.appendChild(n);
+            this.textContent += n.textContent;
+          }
+        }
       }
       contains(node: MockEl): boolean {
         return this.children.includes(node);
@@ -234,7 +276,7 @@ describe('Security & URL State Serialization Regressions (B3)', () => {
       expect(currentGroundLock).toBe('sun');
       expect(panel.floatingCardEl.innerHTML).toContain(e2009.titleZh);
 
-      // 1c. Year search input: astronomical year 0 must return year 0 (公元前1年), not 2026
+      // 1c. Year search input: astronomical year 0, -1999, 3000 must succeed
       const panelEl = panel.el as unknown as MockEl;
       const yearInput = panelEl.querySelector('#ecl-search-year');
       const yearBtn = panelEl.querySelector('#btn-search-year');
@@ -245,13 +287,112 @@ describe('Security & URL State Serialization Regressions (B3)', () => {
       expect(yearList.innerHTML).toContain('公元前1年');
       expect(yearList.innerHTML).not.toContain('2026-');
 
-      // Invalid/non-integer/out-of-range year inputs must show validation message, not 2026
-      for (const badYear of ['', '2026.5', '3001', '-2000', 'abc']) {
+      yearInput.value = '-1999';
+      yearBtn.trigger('click');
+      expect(yearList.innerHTML).toContain('-1999-');
+
+      yearInput.value = '3000';
+      yearBtn.trigger('click');
+      expect(yearList.innerHTML).toContain('3000-');
+
+      // Invalid/non-integer/out-of-range year inputs must show validation message (MS-03)
+      for (const badYear of [
+        '',
+        '2026.5',
+        '3001',
+        '-2000',
+        '100000',
+        '999999',
+        'NaN',
+        'Infinity',
+        '-Infinity',
+        'abc',
+      ]) {
         yearInput.value = badYear;
         yearBtn.trigger('click');
         expect(yearList.innerHTML).toContain('请输入 -1999 至 3000 之间的整数天文年份');
         expect(yearList.innerHTML).not.toContain('2026-');
       }
+
+      // 1d. Unexpected error in searchEclipsesInYear shows .inline-error-msg without clearing selectedEvent (MS-03)
+      const spy = vi.spyOn(eclipseSearch, 'searchEclipsesInYear').mockImplementationOnce(() => {
+        throw new Error('simulated ephemeris failure');
+      });
+      try {
+        yearInput.value = '2026';
+        yearBtn.trigger('click');
+        expect(yearList.innerHTML).toContain('inline-error-msg');
+        expect(yearList.innerHTML).toContain('搜索 2026 年日月食时发生计算异常');
+        expect(yearList.innerHTML).not.toContain('该年份未检索到显著日食或月食事件');
+        // Selected event and floating card remain intact
+        expect(state.get().selectedEclipseId).toBe('solar-2009-07-22');
+        expect(panel.floatingCardEl.innerHTML).toContain(e2009.titleZh);
+      } finally {
+        spy.mockRestore();
+      }
+      // Subsequent valid search recovers cleanly
+      yearInput.value = '2026';
+      yearBtn.trigger('click');
+      expect(yearList.innerHTML).toContain('2026-');
+      expect(yearList.innerHTML).not.toContain('inline-error-msg');
+
+      // 1e. Malicious featuredSiteName / titleZh / introZh / observer name are escaped in EclipsePanel, InfoHUD, and LocationPanel (MS-04 / MS-11)
+      const xssPayload = `<img src=x onerror="window.__xss=1"><script>alert(1)</script>`;
+      const maliciousEvent = {
+        ...e2009,
+        id: 'solar-2009-07-22-xss',
+        titleZh: `日全食 ${xssPayload}`,
+        introZh: `简介 ${xssPayload}`,
+        featuredSiteName: `武汉 ${xssPayload}`,
+        typeLabelZh: `日全食 ${xssPayload}`,
+        durationLabelZh: `6分39秒 ${xssPayload}`,
+      };
+      panel.selectEclipseEvent(maliciousEvent, 'ground');
+      expect(panel.floatingCardEl.innerHTML).not.toContain('<img');
+      expect(panel.floatingCardEl.innerHTML).not.toContain('<script');
+      expect(panel.floatingCardEl.innerHTML).toContain('&lt;img');
+
+      state.setEarthLocation({ name: `地球站 ${xssPayload}`, lat: 30.59, lon: 114.3 });
+      state.setMoonLocation({ name: `月面站 ${xssPayload}`, lat: 0.67, lon: 23.47 });
+
+      const hud = new InfoHUD(state);
+      const hudEl = hud.el as unknown as MockEl;
+      // Expand InfoHUD so detail sections (#hud-sun, #hud-moon, #hud-riseset, #hud-eclipse-status) actually render
+      hudEl.querySelector('#hud-compact-bar').trigger('click', { target: {} });
+      const tUtc = state.get().timeUtc;
+      const eph = computeEphemeris(tUtc);
+      const frame = {
+        eph,
+        phase: computeMoonPhase(tUtc),
+        earthSky: computeEarthObserverSky(tUtc, 30.59, 114.3, 0),
+        moonSky: computeMoonSurfaceSky(tUtc, 0.67, 23.47, eph.sunEclKm, eph.moonEclKm),
+      };
+      hud.refreshDisplay(frame as unknown as Parameters<InfoHUD['refreshDisplay']>[0]);
+      expect(hudEl.querySelector('#hud-sun').innerHTML).toContain('&lt;img');
+      for (const sel of [
+        '#hud-compact-summary',
+        '#hud-sun',
+        '#hud-moon',
+        '#hud-riseset',
+        '#hud-eclipse-status',
+      ]) {
+        const html = hudEl.querySelector(sel).innerHTML;
+        expect(html.length).toBeGreaterThan(0);
+        expect(html).not.toContain('<img');
+        expect(html).not.toContain('<script');
+      }
+
+      state.update({ viewMode: 'moon' });
+      hud.refreshDisplay(frame as unknown as Parameters<InfoHUD['refreshDisplay']>[0]);
+      expect(hudEl.querySelector('#hud-compact-summary').innerHTML).not.toContain('<img');
+      expect(hudEl.querySelector('#hud-compact-summary').innerHTML).toContain('&lt;img');
+      expect(hudEl.querySelector('#hud-eclipse-status').innerHTML).not.toContain('<img');
+      expect(hudEl.querySelector('#hud-eclipse-status').innerHTML).toContain('&lt;img');
+
+      const locPanel = new LocationPanel(state);
+      const locBadge = (locPanel.el as unknown as MockEl).querySelector('#loc-current-badge');
+      expect(locBadge.innerHTML).toBe('');
+      expect(locBadge.textContent).toContain(xssPayload);
 
       // 2. Restore 2024 North American eclipse with Beijing observer preserved in URL
       const e2024 = CURATED_ECLIPSE_CATALOG.find((x) => x.id === 'solar-2024-04-08')!;
@@ -310,3 +451,4 @@ describe('Security & URL State Serialization Regressions (B3)', () => {
     }
   });
 });
+

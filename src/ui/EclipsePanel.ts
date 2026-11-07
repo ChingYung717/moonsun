@@ -3,6 +3,7 @@ import { AppState, DEFAULT_MOON_SITES, escapeHtml } from '../state/AppState';
 import {
   CURATED_ECLIPSE_CATALOG,
   filterCuratedCatalog,
+  getCuratedCatalogStats,
 } from '../astro/eclipses/catalog';
 import {
   EclipseCategory,
@@ -133,15 +134,19 @@ export class EclipsePanel {
   }
 
   private render(): void {
+    const stats = getCuratedCatalogStats();
+    const ancientSolarTotal = stats.solarTotalAll - stats.solarTotalModern;
+    const ancientSolarAnnular = stats.solarAnnularAll - stats.solarAnnularModern;
+
     this.el.innerHTML = `
       <div class="panel-header">
-        <h2>🌑 日月食天象百科 (${CURATED_ECLIPSE_CATALOG.length}场精选)</h2>
+        <h2>🌑 日月食天象百科 (${stats.total}场精选)</h2>
         <span class="sub-badge">${termTipHtml('沙罗序列', '沙罗周期')}</span>
       </div>
 
       <div class="panel-body">
         <div class="tab-bar pro-only">
-          <button type="button" class="tab-btn active" data-tab="curated">🏆 精选200场 (中国优先)</button>
+          <button type="button" class="tab-btn active" data-tab="curated">🏆 精选${stats.total}场 (中国优先)</button>
           <button type="button" class="tab-btn" data-tab="byYear">📅 按年份搜索</button>
           <button type="button" class="tab-btn" data-tab="local">📍 当前地可见</button>
         </div>
@@ -150,11 +155,11 @@ export class EclipsePanel {
         <div id="tab-curated" class="tab-content">
           <div class="filter-bar pro-only">
             <select id="ecl-cat-filter" class="input-control" aria-label="筛选日月食类型">
-              <option value="all">全部类型 (日全食90+日环食35+月全食60+古籍15)</option>
-              <option value="solar-total">🌑 日全食</option>
-              <option value="solar-annular">💍 日环食</option>
-              <option value="lunar-total">🌕 月全食 (红月亮)</option>
-              <option value="solar-partial">📜 古代史料与特殊日食</option>
+              <option value="all">全部类型 (共${stats.total}场：近现代日全食${stats.solarTotalModern}+日环食${stats.solarAnnularModern}+月全食${stats.lunarTotalAll}+古籍${stats.ancientCount})</option>
+              <option value="solar-total">🌑 日全食 (${stats.solarTotalAll}场，含古籍${ancientSolarTotal}场)</option>
+              <option value="solar-annular">💍 日环食 (${stats.solarAnnularAll}场，含古籍${ancientSolarAnnular}场)</option>
+              <option value="lunar-total">🌕 月全食 (${stats.lunarTotalAll}场 · 红月亮)</option>
+              <option value="solar-partial">📜 古代史料与特殊日食 (${stats.ancientCount}场)</option>
             </select>
             <select id="ecl-sort" class="input-control" aria-label="排序方式">
               <option value="score">🔥 最佳效果 + 中国可见优先</option>
@@ -265,7 +270,7 @@ export class EclipsePanel {
   private renderYearSearchList(): void {
     const yearInput = this.el.querySelector('#ecl-search-year') as HTMLInputElement;
     const container = this.el.querySelector('#year-list')!;
-    const raw = yearInput.value.trim();
+    const raw = String(yearInput.value ?? '').trim();
     const year = raw === '' ? NaN : Number(raw);
     if (!Number.isInteger(year) || year < -1999 || year > 3000) {
       container.innerHTML = `<div class="empty-msg">请输入 -1999 至 3000 之间的整数天文年份（公元前1年为 0）</div>`;
@@ -275,8 +280,17 @@ export class EclipsePanel {
       });
       return;
     }
-    const items = searchEclipsesInYear(year);
-    this.populateEventList(container, items);
+    try {
+      const items = searchEclipsesInYear(year);
+      this.populateEventList(container, items);
+    } catch (err) {
+      console.error('[moonsun] 年份日月食搜索异常:', err);
+      container.innerHTML = `<div class="inline-error-msg" role="alert">⚠️ 搜索 ${year} 年日月食时发生计算异常，请稍后重试或切换其他年份</div>`;
+      showToast({
+        message: `⚠️ 搜索 ${year} 年日月食时发生计算异常`,
+        type: 'warn',
+      });
+    }
   }
 
   private renderLocalSearchList(): void {
@@ -310,11 +324,11 @@ export class EclipsePanel {
         return `
           <div class="eclipse-item" data-local-idx="${idx}">
             <div class="ecl-item-top">
-              <span class="ecl-badge solar-${loc.kind}">${loc.typeLabelZh}</span>
+              <span class="ecl-badge solar-${escapeHtml(loc.kind)}">${escapeHtml(loc.typeLabelZh)}</span>
               <span class="ecl-title">本地最大食分 ${(loc.obscuration * 100).toFixed(1)}% · 太阳高度 ${loc.peakAltitudeDeg.toFixed(1)}°${horizonNote}</span>
             </div>
             <div class="ecl-meta">
-              食甚(北京): ${bjStr} | 初亏: ${beginStr.slice(11, 16)} ~ 复圆: ${endStr.slice(11, 16)}
+              食甚(北京): ${escapeHtml(bjStr)} | 初亏: ${escapeHtml(beginStr.slice(11, 16))} ~ 复圆: ${escapeHtml(endStr.slice(11, 16))}
             </div>
           </div>
         `;
@@ -359,20 +373,20 @@ export class EclipsePanel {
       .map((item) => {
         const chinaBadge =
           item.chinaVisibility === 'central'
-            ? `<span class="china-tag central">🇨🇳 ${item.chinaVisibilityLabelZh}</span>`
+            ? `<span class="china-tag central">🇨🇳 ${escapeHtml(item.chinaVisibilityLabelZh)}</span>`
             : item.chinaVisibility === 'partial'
-              ? `<span class="china-tag partial">🇨🇳 ${item.chinaVisibilityLabelZh}</span>`
+              ? `<span class="china-tag partial">🇨🇳 ${escapeHtml(item.chinaVisibilityLabelZh)}</span>`
               : '';
         return `
-          <div class="eclipse-item ${this.selectedEvent?.id === item.id ? 'selected' : ''}" data-id="${item.id}">
+          <div class="eclipse-item ${this.selectedEvent?.id === item.id ? 'selected' : ''}" data-id="${escapeHtml(item.id)}">
             <div class="ecl-item-top">
-              <span class="ecl-badge ${item.category}">${item.typeLabelZh}</span>
-              <span class="ecl-title">${item.titleZh}</span>
+              <span class="ecl-badge ${escapeHtml(item.category)}">${escapeHtml(item.typeLabelZh)}</span>
+              <span class="ecl-title">${escapeHtml(item.titleZh)}</span>
               <span class="ecl-score">★ ${item.score.toFixed(1)}</span>
             </div>
             <div class="ecl-meta">
-              <span>🕒 ${item.dateStrBeijing}</span>
-              <span>⏱ ${item.durationLabelZh}</span>
+              <span>🕒 ${escapeHtml(item.dateStrBeijing)}</span>
+              <span>⏱ ${escapeHtml(item.durationLabelZh)}</span>
               ${chinaBadge}
             </div>
           </div>
@@ -765,9 +779,9 @@ export class EclipsePanel {
       .map((c, idx) => {
         const tStr = formatTimeShort(c.utcMs, contactTz);
         return `
-          <button type="button" class="ms-contact-pill ${c.isKey ? 'is-key' : ''}" data-cidx="${idx}" title="点击跳转到 ${c.labelZh} (${tStr})">
-            <span class="c-name">${c.labelZh} (${c.code})</span>
-            <span class="c-time">${tStr}</span>
+          <button type="button" class="ms-contact-pill ${c.isKey ? 'is-key' : ''}" data-cidx="${idx}" title="点击跳转到 ${escapeHtml(c.labelZh)} (${escapeHtml(tStr)})">
+            <span class="c-name">${escapeHtml(c.labelZh)} (${escapeHtml(c.code)})</span>
+            <span class="c-time">${escapeHtml(tStr)}</span>
           </button>
         `;
       })
@@ -776,21 +790,21 @@ export class EclipsePanel {
     this.floatingCardEl.innerHTML = `
       <div class="detail-header">
         <div class="detail-title-wrap">
-          <span class="ecl-badge ${item.category}">${item.typeLabelZh}</span>
-          <strong>${item.titleZh}</strong>
+          <span class="ecl-badge ${escapeHtml(item.category)}">${escapeHtml(item.typeLabelZh)}</span>
+          <strong>${escapeHtml(item.titleZh)}</strong>
         </div>
         <button type="button" class="ms-card-close" id="close-float-card" aria-label="关闭天象详情卡片" title="关闭详情卡片">×</button>
       </div>
-      <p class="detail-intro">${item.introZh}</p>
+      <p class="detail-intro">${escapeHtml(item.introZh)}</p>
       <div class="detail-stats">
-        <span>食甚(北京): <b>${item.dateStrBeijing}</b></span>
-        <span>${item.featuredSiteName ? '代表观测点' : '极盛点'}: <b>${item.featuredSiteName ? item.featuredSiteName + ' ' : ''}(${latStr}, ${lonStr})</b></span>
-        <span>时长/食分: <b>${item.durationLabelZh} (${(item.obscuration * 100).toFixed(1)}%)</b></span>
+        <span>食甚(北京): <b>${escapeHtml(item.dateStrBeijing)}</b></span>
+        <span>${item.featuredSiteName ? '代表观测点' : '极盛点'}: <b>${item.featuredSiteName ? escapeHtml(item.featuredSiteName) + ' ' : ''}(${latStr}, ${lonStr})</b></span>
+        <span>时长/食分: <b>${escapeHtml(item.durationLabelZh)} (${(item.obscuration * 100).toFixed(1)}%)</b></span>
       </div>
 
       <div class="ms-contacts-section">
         <div class="ms-contacts-head">
-          <span>⏱ 接触时刻（${escapeHtml(siteLabel)} · 当地时间 ${tzLabel}，点击直接跳转）：</span>
+          <span>⏱ 接触时刻（${escapeHtml(siteLabel)} · 当地时间 ${escapeHtml(tzLabel)}，点击直接跳转）：</span>
           <span id="replay-phase-badge" class="replay-phase-badge"></span>
         </div>
         <div class="ms-contacts-bar">${contactsHtml}</div>

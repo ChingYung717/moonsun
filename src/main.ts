@@ -1,6 +1,11 @@
 import './ui/styles.css';
-import { AppState, parseUrlInitialState, syncBrowserUrlNow } from './state/AppState';
-import { SimulationClock } from './time/Clock';
+import {
+  AppState,
+  parseUrlInitialState,
+  shouldExposeDebugHandle,
+  syncBrowserUrlNow,
+} from './state/AppState';
+import { FrameRunner, SimulationClock } from './time/Clock';
 import { MasterRenderer } from './render/Renderer';
 import { TopBar } from './ui/TopBar';
 import { TimePanel } from './ui/TimePanel';
@@ -46,6 +51,22 @@ function bootstrap(): void {
   const uiRoot = document.getElementById('ui-root') as HTMLElement;
 
   const state = new AppState();
+  const clock = new SimulationClock(state);
+
+  state.onTimeBoundaryReached((bound) => {
+    const label = bound === 'min' ? '下限（天文年 -1999 年）' : '上限（公元 3000 年）';
+    showToast({
+      message: `⚠️ 已到达历表支持时间${label}，已自动暂停加速推进`,
+      type: 'warn',
+      durationMs: 6000,
+      actionLabel: '⚡ 回到现在',
+      onAction: () => {
+        clock.resetToNow();
+        showToast('已同步至当前真实时间');
+      },
+    });
+  });
+
   const urlOpts = parseUrlInitialState(state);
 
   // Sync UI mode class on body
@@ -62,7 +83,6 @@ function bootstrap(): void {
   texBadge.textContent = '🪐 正在加载星图贴图...';
   document.body.appendChild(texBadge);
 
-  const clock = new SimulationClock(state);
   const renderer = new MasterRenderer(canvas, state, (loaded, total) => {
     texBadge.textContent = `🪐 正在加载星图贴图 (${loaded}/${total})...`;
     if (loaded >= total) {
@@ -155,9 +175,14 @@ function bootstrap(): void {
     tour.start();
   }
 
+  let lastUiRefresh = -Infinity;
+
   state.subscribe((s, changed) => {
     if (changed.has('uiHidden')) {
       uiRoot.classList.toggle('ui-hidden', s.uiHidden);
+      if (!s.uiHidden) {
+        lastUiRefresh = -Infinity;
+      }
     }
     if (changed.has('uiMode')) {
       applyUiModeClass();
@@ -206,12 +231,47 @@ function bootstrap(): void {
     }
   });
 
-  // Expose helper on window only in development or when explicitly requested via ?debug=1 / ?audit=...
-  const debugParams = new URLSearchParams(window.location.search);
-  if (import.meta.env.DEV || debugParams.has('debug') || debugParams.has('audit')) {
+  const frameRunner = new FrameRunner(
+    state,
+    clock,
+    (now) => {
+      const shouldRefreshUi = !state.get().uiHidden && now - lastUiRefresh > 80;
+      const frameData = renderer.renderFrame(shouldRefreshUi);
+
+      // Throttle DOM updates to ~12 Hz for silky 60fps 3D rendering
+      if (shouldRefreshUi) {
+        timePanel.refreshDisplay();
+        lunarPanel.refreshDisplay(frameData);
+        infoHud.refreshDisplay(frameData);
+        timeline.refreshDisplay();
+        eclipsePanel.refreshReplayProgress();
+        lastUiRefresh = now;
+      }
+    },
+    (_err, recoverToNow) => {
+      lastUiRefresh = -Infinity;
+      timePanel.refreshDisplay();
+      showToast({
+        message: '⚠️ 模拟计算遇到异常，已自动暂停并保留最后有效画面',
+        type: 'warn',
+        durationMs: 8000,
+        actionLabel: '⚡ 回到现在',
+        onAction: () => {
+          lastUiRefresh = -Infinity;
+          recoverToNow();
+          timePanel.refreshDisplay();
+          showToast('已恢复并同步至当前真实时间');
+        },
+      });
+    }
+  );
+
+  // Expose diagnostic handle only in development or when explicitly enabled via ?debug=1 / ?audit=1
+  if (shouldExposeDebugHandle(window.location.search, import.meta.env.DEV)) {
     (window as any).__MOONSUN__ = {
       state,
       clock,
+      frameRunner,
       renderer,
       dock,
       eclipsePanel,
@@ -222,24 +282,13 @@ function bootstrap(): void {
     };
   }
 
-  let lastUiRefresh = 0;
   function animate(now: number): void {
     requestAnimationFrame(animate);
-    clock.tick(now);
-    const frameData = renderer.renderFrame();
-
-    // Throttle DOM updates to ~12 Hz for silky 60fps 3D rendering
-    if (now - lastUiRefresh > 80) {
-      lastUiRefresh = now;
-      timePanel.refreshDisplay();
-      lunarPanel.refreshDisplay(frameData);
-      infoHud.refreshDisplay(frameData);
-      timeline.refreshDisplay();
-      eclipsePanel.refreshReplayProgress();
-    }
+    frameRunner.runFrame(now);
   }
 
   requestAnimationFrame(animate);
 }
 
 bootstrap();
+
