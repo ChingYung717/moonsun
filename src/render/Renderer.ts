@@ -15,6 +15,7 @@ import {
   MoonSurfaceSky,
 } from '../astro/observer';
 import { computeMoonPhase, MoonPhaseInfo } from '../astro/phase';
+import { showToast } from '../ui/Toast';
 
 export interface FrameAstroData {
   eph: EphemerisSnapshot;
@@ -36,6 +37,14 @@ export class MasterRenderer {
   public readonly moonSurfaceView: MoonSurfaceView;
 
   private lastFrameTime = performance.now();
+  private isContextLost = false;
+  private contextLostTimer: number | null = null;
+
+  private cachedEarthSky: EarthObserverSky | null = null;
+  private lastEarthSkyKey = { timeUtc: NaN, lat: NaN, lon: NaN, elevation: NaN };
+
+  private cachedMoonSky: MoonSurfaceSky | null = null;
+  private lastMoonSkyKey = { timeUtc: NaN, lat: NaN, lon: NaN };
 
   constructor(
     public readonly canvas: HTMLCanvasElement,
@@ -60,7 +69,43 @@ export class MasterRenderer {
     this.groundView = new GroundView(canvas, this.textures, state);
     this.moonSurfaceView = new MoonSurfaceView(canvas, this.textures, state);
 
+    canvas.addEventListener('webglcontextlost', (e) => {
+      e.preventDefault();
+      this.isContextLost = true;
+      if (this.contextLostTimer !== null) {
+        window.clearTimeout(this.contextLostTimer);
+      }
+      this.contextLostTimer = window.setTimeout(() => {
+        this.contextLostTimer = null;
+        if (this.isContextLost) {
+          showToast({
+            message: '⚠️ WebGL 渲染上下文已丢失且未能自动恢复，请尝试刷新页面或释放显存',
+            type: 'warn',
+            durationMs: 8000,
+          });
+        }
+      }, 3000);
+    });
+
+    canvas.addEventListener('webglcontextrestored', () => {
+      this.isContextLost = false;
+      if (this.contextLostTimer !== null) {
+        window.clearTimeout(this.contextLostTimer);
+        this.contextLostTimer = null;
+      }
+      for (const tex of Object.values(this.textures)) {
+        if (tex && typeof tex === 'object' && 'needsUpdate' in tex) {
+          (tex as THREE.Texture).needsUpdate = true;
+        }
+      }
+      showToast('✨ WebGL 3D 渲染上下文已自动恢复');
+    });
+
     window.addEventListener('resize', () => this.onResize());
+  }
+
+  public isWebGLContextLost(): boolean {
+    return this.isContextLost;
   }
 
   private onResize(): void {
@@ -72,7 +117,7 @@ export class MasterRenderer {
     this.moonSurfaceView.resize(w, h);
   }
 
-  public renderFrame(): FrameAstroData {
+  public renderFrame(needHudSky = true): FrameAstroData {
     const now = performance.now();
     const dtSec = Math.min(0.1, (now - this.lastFrameTime) / 1000);
     this.lastFrameTime = now;
@@ -87,41 +132,73 @@ export class MasterRenderer {
     const scale = this.scaleController.computeSceneScale(eph);
     const phase = computeMoonPhase(s.timeUtc);
 
-    const earthSky = computeEarthObserverSky(
-      s.timeUtc,
-      s.earthObserver.lat,
-      s.earthObserver.lon,
-      s.earthObserver.elevation
-    );
-    const moonSky = computeMoonSurfaceSky(
-      s.timeUtc,
-      s.moonObserver.lat,
-      s.moonObserver.lon,
-      eph.sunEclKm,
-      eph.moonEclKm
-    );
+    const earthInputsChanged =
+      s.timeUtc !== this.lastEarthSkyKey.timeUtc ||
+      s.earthObserver.lat !== this.lastEarthSkyKey.lat ||
+      s.earthObserver.lon !== this.lastEarthSkyKey.lon ||
+      s.earthObserver.elevation !== this.lastEarthSkyKey.elevation;
+
+    if (!this.cachedEarthSky || (earthInputsChanged && (s.viewMode === 'ground' || needHudSky))) {
+      this.cachedEarthSky = computeEarthObserverSky(
+        s.timeUtc,
+        s.earthObserver.lat,
+        s.earthObserver.lon,
+        s.earthObserver.elevation
+      );
+      this.lastEarthSkyKey = {
+        timeUtc: s.timeUtc,
+        lat: s.earthObserver.lat,
+        lon: s.earthObserver.lon,
+        elevation: s.earthObserver.elevation,
+      };
+    }
+    const earthSky = this.cachedEarthSky;
+
+    const moonInputsChanged =
+      s.timeUtc !== this.lastMoonSkyKey.timeUtc ||
+      s.moonObserver.lat !== this.lastMoonSkyKey.lat ||
+      s.moonObserver.lon !== this.lastMoonSkyKey.lon;
+
+    if (!this.cachedMoonSky || (moonInputsChanged && s.viewMode === 'moon')) {
+      this.cachedMoonSky = computeMoonSurfaceSky(
+        s.timeUtc,
+        s.moonObserver.lat,
+        s.moonObserver.lon,
+        eph.sunEclKm,
+        eph.moonEclKm
+      );
+      this.lastMoonSkyKey = {
+        timeUtc: s.timeUtc,
+        lat: s.moonObserver.lat,
+        lon: s.moonObserver.lon,
+      };
+    }
+    const moonSky = this.cachedMoonSky;
 
     if (s.viewMode === 'space') {
       this.spaceView.controls.enabled = true;
       this.groundView.setHudVisible(false);
       this.moonSurfaceView.setHudVisible(false);
       this.spaceView.update(eph, earthOri, moonOri, scale, phase.illuminatedFraction);
-      this.renderer.render(this.spaceView.scene, this.spaceView.camera);
+      if (!this.isContextLost) {
+        this.renderer.render(this.spaceView.scene, this.spaceView.camera);
+      }
     } else if (s.viewMode === 'ground') {
       this.spaceView.controls.enabled = false;
       this.spaceView.setHudVisible(false);
       this.moonSurfaceView.setHudVisible(false);
       this.groundView.update(eph, earthSky, phase.illuminatedFraction, earthOri, moonOri);
-      this.renderer.render(this.groundView.scene, this.groundView.camera);
+      if (!this.isContextLost) {
+        this.renderer.render(this.groundView.scene, this.groundView.camera);
+      }
     } else {
       this.spaceView.controls.enabled = false;
       this.spaceView.setHudVisible(false);
       this.groundView.setHudVisible(false);
       this.moonSurfaceView.update(eph, moonSky, earthOri, moonOri);
-      this.renderer.render(
-        this.moonSurfaceView.scene,
-        this.moonSurfaceView.camera
-      );
+      if (!this.isContextLost) {
+        this.renderer.render(this.moonSurfaceView.scene, this.moonSurfaceView.camera);
+      }
     }
 
     return {
@@ -135,3 +212,4 @@ export class MasterRenderer {
     };
   }
 }
+

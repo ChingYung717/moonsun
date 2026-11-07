@@ -29,7 +29,40 @@ export interface SolarEclipseShadowPath {
   centerLine: EclipseCenterPathPoint[];
 }
 
+/**
+ * Each SolarEclipseShadowPath contains ~90–120 EclipseCenterPathPoint objects (~16–20 KB).
+ * Bounding the LRU cache to 64 entries caps memory below ~1.3 MB while retaining recent browsed events.
+ */
+export const MAX_SHADOW_PATH_CACHE_SIZE = 64;
 const pathCache = new Map<number, SolarEclipseShadowPath>();
+let pathCacheHits = 0;
+let pathCacheMisses = 0;
+let pathCacheEvictions = 0;
+
+export function clearShadowPathCache(): void {
+  pathCache.clear();
+  pathCacheHits = 0;
+  pathCacheMisses = 0;
+  pathCacheEvictions = 0;
+}
+
+export function getShadowPathCacheStats(): {
+  size: number;
+  maxSize: number;
+  hits: number;
+  misses: number;
+  evictions: number;
+  keys: number[];
+} {
+  return {
+    size: pathCache.size,
+    maxSize: MAX_SHADOW_PATH_CACHE_SIZE,
+    hits: pathCacheHits,
+    misses: pathCacheMisses,
+    evictions: pathCacheEvictions,
+    keys: Array.from(pathCache.keys()),
+  };
+}
 
 /**
  * Intersect ray P(t) = O + t * D (with ||D|| = 1) with WGS-84 ellipsoid in ECEF:
@@ -95,7 +128,14 @@ interface RawCenterHit {
 export function computeSolarEclipsePath(peakUtcMs: number): SolarEclipseShadowPath {
   const roundedKey = Math.round(peakUtcMs / 60000);
   const cached = pathCache.get(roundedKey);
-  if (cached) return cached;
+  if (cached) {
+    pathCacheHits += 1;
+    // Refresh LRU order
+    pathCache.delete(roundedKey);
+    pathCache.set(roundedKey, cached);
+    return cached;
+  }
+  pathCacheMisses += 1;
 
   const spanMinutes = 165; // +/- 2h 45m around peak
   const stepMinutes = 2;
@@ -288,6 +328,15 @@ export function computeSolarEclipsePath(peakUtcMs: number): SolarEclipseShadowPa
     peakUtcMs,
     centerLine,
   };
+  if (pathCache.has(roundedKey)) {
+    pathCache.delete(roundedKey);
+  }
+  while (pathCache.size >= MAX_SHADOW_PATH_CACHE_SIZE) {
+    const oldestKey = pathCache.keys().next().value;
+    if (oldestKey === undefined) break;
+    pathCache.delete(oldestKey);
+    pathCacheEvictions += 1;
+  }
   pathCache.set(roundedKey, result);
   return result;
 }
